@@ -33,15 +33,10 @@ Supabase dashboard for your project:
 - Settings -> API -> **Project URL** -> this is `NEXT_PUBLIC_SUPABASE_URL`
 - Settings -> API -> **anon public** key -> this is `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
-Apply the migrations once, locally, so the project actually has the `todos` table:
+**Network Restrictions decision:** this project has them ON (confirmed - a local `supabase db push` attempt hit `EADDRNOTALLOWED`). Keeping them on is actually the more faithful test, since it's what exercises `open-db-network-window`/`close-db-network-window` for real - so we're keeping them on rather than disabling them. That means:
 
-```bash
-npx supabase login                # browser OAuth
-npx supabase link --project-ref <SUPABASE_PROJECT_ID>
-npx supabase db push
-```
-
-If your project has network restrictions enabled (Settings -> Database -> Network Restrictions shows entries), note that for step 4 below (`MANAGE_NETWORK_WINDOW`). Most free-tier projects have none - leave it off.
+- Skip running `supabase db push` locally - no need. `promote-to-production.yaml` runs `run-migration: true`, so the first CI deploy (step 5a below) applies the initial migration itself, opening its own network window to do it.
+- Set `MANAGE_NETWORK_WINDOW=true` and a real `SUPABASE_BASELINE_CIDRS` value in step 4 below (not the placeholder-blank shown there) - the CIDR the allow-list gets restored to once a CI run finishes. Your own current IP works well as this baseline (e.g. `<your-ip>/32`) - gives you standing local `psql`/dashboard access between CI runs, while CI temporarily widens it during each migrate/restore and narrows it back after. No manual dashboard IP-adding needed - `open-db-network-window` authenticates via `SUPABASE_ACCESS_TOKEN` through Supabase's management API, which isn't subject to the Postgres-level restriction itself.
 
 ### 3. Cloudflare R2 (for the snapshot/restore path)
 
@@ -65,7 +60,7 @@ gh secret set VERCEL_TOKEN --body "<value>"
 gh variable set VERCEL_SCOPE --body "<your-vercel-username>"
 gh variable set VERCEL_PROJECT --body "pipeline-sandbox"
 gh variable set PROD_ALIAS --body ""                    # leave blank to use Vercel's auto *.vercel.app alias
-gh variable set MANAGE_NETWORK_WINDOW --body "false"     # "true" only if your Supabase project has network restrictions configured
+gh variable set MANAGE_NETWORK_WINDOW --body "true"      # this project has Network Restrictions on - see note above
 ```
 
 Environment-scoped (`production` AND `testing` both need these - the two environments already exist on the repo):
@@ -75,7 +70,7 @@ for ENV in production testing; do
   gh secret set SUPABASE_PROJECT_ID    --env "$ENV" --body "<value>"
   gh secret set SUPABASE_ACCESS_TOKEN  --env "$ENV" --body "<value>"
   gh secret set SUPABASE_DB_PASSWORD   --env "$ENV" --body "<value>"
-  gh variable set SUPABASE_BASELINE_CIDRS --env "$ENV" --body ""   # leave blank unless MANAGE_NETWORK_WINDOW=true
+  gh variable set SUPABASE_BASELINE_CIDRS --env "$ENV" --body "<your-ip>/32"   # your current IP, e.g. 103.241.225.245/32
 done
 ```
 
