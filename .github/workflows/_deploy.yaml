@@ -1,0 +1,121 @@
+name: "Deploy: (shared) Vercel + Supabase"
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Deployment environment (testing/production)"
+        required: true
+        type: string
+      vercel-environment:
+        description: "Vercel environment (testing/production)"
+        required: true
+        type: string
+      vercel-production:
+        description: "Deploy as Vercel production"
+        required: false
+        type: boolean
+        default: false
+      vercel-alias:
+        description: "Custom domain alias (optional)"
+        required: false
+        type: string
+      vercel-project-id:
+        description: "Vercel project ID for linking"
+        required: false
+        type: string
+      run-migration:
+        description: "Run Supabase migration before deployment"
+        required: false
+        type: boolean
+        default: true
+      take-snapshot:
+        description: "Dump the database to R2 before migrating (production only)"
+        required: false
+        type: boolean
+        default: false
+      ref:
+        description: "Git ref to check out (tag, branch, or SHA). Defaults to github.ref."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+      SUPABASE_ACCESS_TOKEN:
+        required: false
+      SUPABASE_PROJECT_ID:
+        required: false
+      SUPABASE_DB_PASSWORD:
+        required: false
+      R2_ACCOUNT_ID:
+        required: false
+      R2_DB_BACKUP_BUCKET:
+        required: false
+      R2_DB_BACKUP_ACCESS_KEY_ID:
+        required: false
+      R2_DB_BACKUP_SECRET_ACCESS_KEY:
+        required: false
+    outputs:
+      deployment-url:
+        description: "The deployed preview URL"
+        value: ${{ jobs.deploy.outputs.deployment-url }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group:
+        ${{ inputs.run-migration && format('supabase-migrate-{0}', inputs.environment)
+        || format('deploy-no-migration-{0}', github.run_id) }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    outputs:
+      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.ref }}
+      - uses: ./.github/actions/setup-environment
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Migrate Supabase Database
+        if: inputs.run-migration
+        uses: ./.github/actions/migrate-supabase
+        with:
+          project-id: ${{ secrets.SUPABASE_PROJECT_ID }}
+          access-token: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          db-password: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          baseline-cidrs: ${{ vars.SUPABASE_BASELINE_CIDRS }}
+          take-snapshot: ${{ inputs.take-snapshot && 'true' || 'false' }}
+          release-tag: ${{ inputs.ref }}
+          r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          r2-backup-bucket: ${{ secrets.R2_DB_BACKUP_BUCKET }}
+          r2-backup-access-key-id: ${{ secrets.R2_DB_BACKUP_ACCESS_KEY_ID }}
+          r2-backup-secret-access-key: ${{ secrets.R2_DB_BACKUP_SECRET_ACCESS_KEY }}
+
+      - name: Deploy to Vercel
+        id: deploy
+        uses: ./.github/actions/deploy-to-vercel
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          scope: ${{ vars.VERCEL_SCOPE }}
+          environment: ${{ inputs.vercel-environment }}
+          production: ${{ inputs.vercel-production }}
+          alias: ${{ inputs.vercel-alias }}
+          project-id: ${{ inputs.vercel-project-id }}
+
+      - name: Deployment Summary
+        run: |
+          echo "## 🚀 Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**URL:** ${{ steps.deploy.outputs.deployment-url }}" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ inputs.vercel-alias }}" ]; then
+            echo "**Alias:** ${{ inputs.vercel-alias }}" >> $GITHUB_STEP_SUMMARY
+          fi

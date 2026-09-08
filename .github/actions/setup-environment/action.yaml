@@ -1,0 +1,30 @@
+name: Setup Environment
+description: Checkout code, set up Node.js, and install dependencies
+
+inputs:
+  node-version:
+    description: "Node.js version to use"
+    default: "20.18.0"
+    required: false
+  ref:
+    description: "Git ref to check out (tag, branch, or SHA). Defaults to github.ref."
+    default: ""
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+
+    - name: Use Node.js
+      uses: actions/setup-node@v5
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: "npm"
+
+    - name: Install dependencies
+      shell: bash
+      run: npm ci

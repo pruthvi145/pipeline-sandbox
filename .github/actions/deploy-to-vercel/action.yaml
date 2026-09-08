@@ -1,0 +1,81 @@
+name: Deploy to Vercel
+description: Deploy application to Vercel with configurable environment settings
+
+inputs:
+  vercel-token:
+    description: "Vercel authentication token"
+    required: true
+  environment:
+    description: "Vercel environment (preview/testing/production)"
+    required: true
+  scope:
+    description: "Vercel scope/team slug (your personal Vercel username for a Hobby account)"
+    required: true
+  production:
+    description: "Deploy to production (true/false)"
+    default: "false"
+    required: false
+  alias:
+    description: "Custom domain alias (optional - leave blank to use Vercel's default *.vercel.app alias)"
+    required: false
+  project-id:
+    description: "Vercel project ID (optional, for linking)"
+    required: false
+
+outputs:
+  deployment-url:
+    description: "URL of the deployed application"
+    value: ${{ steps.deploy.outputs.url }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Cache Vercel project configuration
+      uses: actions/cache@v4
+      with:
+        path: .vercel
+        key: ${{ runner.os }}-vercel-config-${{ inputs.project-id }}-${{ inputs.environment }}
+
+    - name: Link Vercel Project
+      if: inputs.project-id != ''
+      shell: bash
+      run: |
+        echo "🔗 Linking Vercel project..."
+        npx vercel link --scope=${{ inputs.scope }} --project=${{ inputs.project-id }} --yes --token=${{ inputs.vercel-token }}
+
+    - name: Pull Vercel Environment
+      shell: bash
+      run: |
+        echo "📥 Pulling Vercel environment configuration..."
+        npx vercel pull --yes --scope=${{ inputs.scope }} --environment=${{ inputs.environment }} --token=${{ inputs.vercel-token }}
+
+    - name: Build Project
+      shell: bash
+      run: |
+        echo "🔨 Building project..."
+        if [ "${{ inputs.production }}" = "true" ]; then
+          npx vercel build --prod --scope=${{ inputs.scope }} --token=${{ inputs.vercel-token }}
+        else
+          npx vercel build --target=${{ inputs.environment }} --scope=${{ inputs.scope }} --token=${{ inputs.vercel-token }}
+        fi
+
+    - name: Deploy to Vercel
+      id: deploy
+      shell: bash
+      run: |
+        echo "🚀 Deploying to Vercel..."
+        if [ "${{ inputs.production }}" = "true" ]; then
+          url=$(npx vercel deploy --prebuilt --prod --scope=${{ inputs.scope }} --token=${{ inputs.vercel-token }})
+        else
+          url=$(npx vercel deploy --prebuilt --target=${{ inputs.environment }} --scope=${{ inputs.scope }} --token=${{ inputs.vercel-token }})
+        fi
+        echo "url=$url" >> $GITHUB_OUTPUT
+        echo "✅ Deployed to: $url"
+
+    - name: Set custom alias
+      if: inputs.alias != ''
+      shell: bash
+      run: |
+        echo "🔗 Setting custom alias: ${{ inputs.alias }}"
+        npx vercel alias --scope=${{ inputs.scope }} ${{ steps.deploy.outputs.url }} ${{ inputs.alias }} --token=${{ inputs.vercel-token }}
+        echo "✅ Alias set successfully"

@@ -1,0 +1,122 @@
+name: Migrate Supabase Database
+description: Run Supabase migrations against any environment (testing/production)
+
+inputs:
+  project-id:
+    description: "Supabase project reference ID"
+    required: true
+  access-token:
+    description: "Supabase access token"
+    required: true
+  db-password:
+    description: "Supabase database password"
+    required: true
+  baseline-cidrs:
+    description: "Space-separated CIDRs the allow-list is restored to after migrating (only used if vars.MANAGE_NETWORK_WINDOW is true)"
+    required: false
+    default: ""
+  take-snapshot:
+    description: 'Dump public/supabase_migrations and upload to R2 before migrating ("true"/"false")'
+    required: false
+    default: "false"
+  release-tag:
+    description: "Release tag used to name the snapshot object in R2 (e.g. v1.0.0). Required when take-snapshot is true."
+    required: false
+    default: ""
+  r2-account-id:
+    required: false
+    default: ""
+  r2-backup-bucket:
+    required: false
+    default: ""
+  r2-backup-access-key-id:
+    required: false
+    default: ""
+  r2-backup-secret-access-key:
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - uses: ./.github/actions/open-db-network-window
+      with:
+        project-id: ${{ inputs.project-id }}
+        access-token: ${{ inputs.access-token }}
+        baseline-cidrs: ${{ inputs.baseline-cidrs }}
+
+    - name: Link to Supabase project
+      shell: bash
+      env:
+        SUPABASE_ACCESS_TOKEN: ${{ inputs.access-token }}
+        SUPABASE_DB_PASSWORD: ${{ inputs.db-password }}
+        PROJECT_ID: ${{ inputs.project-id }}
+      run: |
+        echo "🔗 Linking to Supabase project ${PROJECT_ID}..."
+        npx supabase link --project-ref "$PROJECT_ID"
+
+    - name: Snapshot database before migration
+      if: inputs.take-snapshot == 'true'
+      shell: bash
+      env:
+        SUPABASE_ACCESS_TOKEN: ${{ inputs.access-token }}
+        SUPABASE_DB_PASSWORD: ${{ inputs.db-password }}
+        PROJECT_ID: ${{ inputs.project-id }}
+        RELEASE_TAG: ${{ inputs.release-tag }}
+        R2_ACCOUNT_ID: ${{ inputs.r2-account-id }}
+        R2_DB_BACKUP_BUCKET: ${{ inputs.r2-backup-bucket }}
+        R2_DB_BACKUP_ACCESS_KEY_ID: ${{ inputs.r2-backup-access-key-id }}
+        R2_DB_BACKUP_SECRET_ACCESS_KEY: ${{ inputs.r2-backup-secret-access-key }}
+      run: node "${GITHUB_WORKSPACE}/.github/scripts/db-snapshot-upload.mjs"
+
+    - name: Run database migrations
+      shell: bash
+      env:
+        SUPABASE_ACCESS_TOKEN: ${{ inputs.access-token }}
+        SUPABASE_DB_PASSWORD: ${{ inputs.db-password }}
+        BASELINE_CIDRS: ${{ inputs.baseline-cidrs }}
+        PROJECT_ID: ${{ inputs.project-id }}
+        MANAGE_NETWORK_WINDOW: ${{ vars.MANAGE_NETWORK_WINDOW }}
+      run: |
+        set -uo pipefail
+        echo "🚀 Running database migrations..."
+        if OUT="$(npx supabase db push 2>&1)"; then
+          echo "$OUT"
+          echo "✅ Database migrations completed successfully"
+          exit 0
+        fi
+        echo "$OUT"
+
+        if [ "${MANAGE_NETWORK_WINDOW:-}" != "true" ] || [ -z "${BASELINE_CIDRS// /}" ]; then
+          exit 1
+        fi
+
+        SEEN="$(sed -n 's/.*allow_list: {\([0-9, ]*\)}.*/\1/p' <<<"$OUT" | head -1 | tr -d ' ' | tr ',' '.')"
+        if [ -z "$SEEN" ]; then
+          exit 1
+        fi
+
+        echo "::warning::Supabase saw this runner as ${SEEN}, which is not what api.ipify.org reported. Reopening the window for ${SEEN}."
+        FLAGS=()
+        for cidr in $BASELINE_CIDRS; do FLAGS+=(--db-allow-cidr "$cidr"); done
+        npx supabase network-restrictions update --project-ref "$PROJECT_ID" \
+          "${FLAGS[@]}" --db-allow-cidr "${SEEN}/32" --experimental
+
+        for _ in $(seq 1 20); do
+          STATUS="$(curl -sS --max-time 10 \
+            -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+            "https://api.supabase.com/v1/projects/${PROJECT_ID}/network-restrictions" \
+            | jq -r '.status // empty')"
+          [ "$STATUS" = "applied" ] && break
+          sleep 5
+        done
+
+        npx supabase db push
+        echo "✅ Database migrations completed successfully"
+
+    - if: always()
+      uses: ./.github/actions/close-db-network-window
+      with:
+        project-id: ${{ inputs.project-id }}
+        access-token: ${{ inputs.access-token }}
+        baseline-cidrs: ${{ inputs.baseline-cidrs }}

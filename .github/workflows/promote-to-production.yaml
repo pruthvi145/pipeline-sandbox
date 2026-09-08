@@ -1,0 +1,131 @@
+name: "Release: Promote to Production"
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to promote (e.g., v1.0.0). Must be an existing pre-release."
+        required: true
+        type: string
+      redeploy:
+        description: "Re-deploy a tag that is already stable (e.g. to pick up new env vars). Skips the pre-release check."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.find.outputs.release_id }}
+      already_stable: ${{ steps.find.outputs.already_stable }}
+    steps:
+      - name: Validate tag format and release state
+        id: find
+        uses: actions/github-script@v9
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_REDEPLOY: ${{ inputs.redeploy }}
+        with:
+          script: |
+            const tag = process.env.INPUT_TAG;
+            const redeploy = process.env.INPUT_REDEPLOY === 'true';
+
+            if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
+              core.setFailed(`Tag "${tag}" does not match strict v-prefixed semver (e.g. v1.0.0). Refusing to promote.`);
+              return;
+            }
+
+            let release;
+            try {
+              const res = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              release = res.data;
+            } catch (err) {
+              if (err && err.status === 404) {
+                core.setFailed(`No GitHub Release found for tag "${tag}".`);
+                return;
+              }
+              throw err;
+            }
+
+            if (release.draft) {
+              core.setFailed(`Release "${tag}" is still a draft. Publish it before promoting.`);
+              return;
+            }
+
+            if (!release.prerelease && !redeploy) {
+              core.setFailed(`${tag} is already a stable release - nothing to promote. Re-run with "redeploy" enabled to deploy it again.`);
+              return;
+            }
+
+            core.setOutput('release_id', release.id);
+            core.setOutput('already_stable', String(!release.prerelease));
+
+            if (release.prerelease) {
+              core.info(`Validated: ${tag} is a pre-release (id ${release.id}) - promoting to stable`);
+            } else {
+              core.warning(`${tag} is already stable - re-deploying it to production without changing release state.`);
+            }
+
+  deploy-to-prod:
+    needs: validate-release
+    uses: ./.github/workflows/_deploy.yaml
+    with:
+      environment: production
+      vercel-environment: production
+      vercel-production: true
+      vercel-project-id: ${{ vars.VERCEL_PROJECT }}
+      run-migration: true
+      take-snapshot: true
+      vercel-alias: ${{ vars.PROD_ALIAS }}
+      ref: ${{ inputs.tag }}
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_DB_BACKUP_BUCKET: ${{ secrets.R2_DB_BACKUP_BUCKET }}
+      R2_DB_BACKUP_ACCESS_KEY_ID: ${{ secrets.R2_DB_BACKUP_ACCESS_KEY_ID }}
+      R2_DB_BACKUP_SECRET_ACCESS_KEY: ${{ secrets.R2_DB_BACKUP_SECRET_ACCESS_KEY }}
+
+  # Flip prerelease → false only after deploy succeeds, so a failed deploy
+  # leaves the release as a prerelease (easy retry via re-dispatch).
+  #
+  # Sandbox simplification: the real app uses a GitHub App token here so the
+  # release update is attributed to a bot identity. This repo has no GitHub
+  # App set up, so it uses the workflow's own default GITHUB_TOKEN instead -
+  # functionally identical for a personal repo, just attributed to you.
+  mark-stable:
+    runs-on: ubuntu-latest
+    needs: [validate-release, deploy-to-prod]
+    if: needs.deploy-to-prod.result == 'success' && needs.validate-release.outputs.already_stable != 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Mark release as stable
+        uses: actions/github-script@v9
+        env:
+          RELEASE_ID: ${{ needs.validate-release.outputs.release_id }}
+          INPUT_TAG: ${{ inputs.tag }}
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: parseInt(process.env.RELEASE_ID, 10),
+              prerelease: false,
+              make_latest: 'true',
+            });
+            core.info(`${process.env.INPUT_TAG} is now the latest stable release`);

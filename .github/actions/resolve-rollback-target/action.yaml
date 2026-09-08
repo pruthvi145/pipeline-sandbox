@@ -1,0 +1,55 @@
+name: Resolve Rollback Target
+description: Resolve the rollback target release and detect a database migration boundary crossed by rolling back to it
+
+inputs:
+  requested-tag:
+    description: "Explicit tag to roll back to (blank = auto-resolve to the release before the live one)"
+    required: false
+    default: ""
+  live-tag:
+    description: "Tag of the release currently live in production"
+    required: true
+  releases:
+    description: "JSON array of {tag, publishedAt} for non-prerelease, non-draft releases, sorted newest to oldest"
+    required: true
+  changed-files:
+    description: "JSON array of file paths changed between the resolved target and the live release"
+    required: true
+
+outputs:
+  tag:
+    description: "Resolved rollback target tag"
+    value: ${{ steps.resolve.outputs.tag }}
+  resolved-via:
+    description: "manual (explicit tag input) or auto (next-oldest stable release)"
+    value: ${{ steps.resolve.outputs.resolved-via }}
+  migration-boundary:
+    description: '"true" if any path under supabase/migrations/ is present in changed-files'
+    value: ${{ steps.resolve.outputs.migration-boundary }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v9
+      id: resolve
+      env:
+        REQUESTED_TAG: ${{ inputs.requested-tag }}
+        LIVE_TAG: ${{ inputs.live-tag }}
+        RELEASES: ${{ inputs.releases }}
+        CHANGED_FILES: ${{ inputs.changed-files }}
+      with:
+        script: |
+          const { resolveRollbackTarget, detectMigrationBoundary } = require(`${process.env.GITHUB_ACTION_PATH}/resolve.js`);
+
+          const { tag, resolvedVia } = resolveRollbackTarget({
+            requestedTag: process.env.REQUESTED_TAG,
+            liveTag: process.env.LIVE_TAG,
+            releases: JSON.parse(process.env.RELEASES),
+          });
+          const migrationBoundary = detectMigrationBoundary(
+            JSON.parse(process.env.CHANGED_FILES)
+          );
+
+          core.setOutput('tag', tag);
+          core.setOutput('resolved-via', resolvedVia);
+          core.setOutput('migration-boundary', String(migrationBoundary));
