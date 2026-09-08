@@ -18,6 +18,12 @@ vercel whoami                     # this is your VERCEL_SCOPE (your username)
 
 Get a token: Vercel dashboard -> Settings -> Tokens -> Create Token (no expiry, or 1 year) -> copy it. This is `VERCEL_TOKEN`.
 
+**Also required** - `vercel pull` (used by the deploy action) reads env vars from Vercel's own project config, NOT from GitHub secrets. Set these in the Vercel dashboard -> your `pipeline-sandbox` project -> Settings -> Environment Variables -> add for the **Production** environment (values from step 2 below):
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+Note: this sandbox's workflows only ever deploy to Vercel's built-in `production` target (never a custom "testing" environment) - Vercel's custom named environments require a paid Pro/Enterprise plan and aren't available on Hobby, so this setup deliberately avoids needing one.
+
 ### 2. Supabase (your existing free-tier project)
 
 Supabase dashboard for your project:
