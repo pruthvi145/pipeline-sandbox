@@ -1,0 +1,91 @@
+name: "Release: Create Release PR"
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  # Sandbox simplification: the real app uses a GitHub App token here so the
+  # release PR / release / tag are attributed to a bot identity, not a human.
+  # This repo has no GitHub App set up, so it uses the workflow's own default
+  # GITHUB_TOKEN instead. That requires "Allow GitHub Actions to create and
+  # approve pull requests" enabled in Settings -> Actions -> General (already
+  # turned on for this repo) - without it, release-please-action fails to
+  # open the Release PR at all.
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      pr: ${{ steps.release.outputs.pr }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Flip to prerelease BEFORE deploy so a failed deploy never leaves the
+  # release as the latest stable.
+  mark-prerelease:
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Convert release to pre-release
+        uses: actions/github-script@v9
+        env:
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag,
+            });
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              prerelease: true,
+            });
+            core.info(`Marked ${tag} as pre-release`);
+
+  # vercel-environment is "preview" here, not "testing" - Vercel's custom
+  # named environments (which the real app's "testing" is) require a paid
+  # Pro/Enterprise plan and aren't available on this sandbox's Hobby account.
+  # Preview is Vercel's built-in non-production target, available on any
+  # plan, and fills the same functional role for this demo-deploy step. The
+  # "testing" GitHub Environment name is unrelated and unchanged - it only
+  # controls which GitHub secrets this job can see.
+  deploy-to-demo:
+    needs: [release-please, mark-prerelease]
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: ./.github/workflows/_deploy.yaml
+    with:
+      environment: testing
+      vercel-environment: preview
+      vercel-production: false
+      vercel-project-id: ${{ vars.VERCEL_PROJECT }}
+      run-migration: true
+      ref: ${{ needs.release-please.outputs.tag_name }}
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}

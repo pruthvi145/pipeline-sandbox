@@ -78,25 +78,31 @@ done
 
 ### 5. Prove the pipeline, in order
 
-**a. Normal deploy + first release** (creates the app's first Vercel deployment and a v1.0.0 pre-release):
+**a. Real release-please flow** (this is now the actual TF flow, not a shortcut - push a conventional commit to main, release-please opens a Release PR, merging it tags + releases + deploys to demo):
 
 ```bash
-gh api repos/pruthvi145/pipeline-sandbox/releases -X POST \
-  -f tag_name=v1.0.0 -f target_commitish=main -F prerelease=true -f name=v1.0.0
-gh workflow run promote-to-production.yaml -f tag=v1.0.0
+git commit --allow-empty -m "feat: seed the first sandbox release"
+git push origin main
+```
+
+- Watch `release-please.yaml` run (`gh run watch`) - it opens a PR titled something like "chore(main): release 0.2.0".
+- **Merge that PR yourself in the GitHub UI** (or `gh pr merge --squash`) - this step must be a real merge, not automated, since a bot-token merge wouldn't trigger the next workflow run (GitHub doesn't chain workflow runs off its own default token's actions - see the note in `release-please.yaml`).
+- That merge push re-triggers `release-please.yaml`, which now creates the tag + GitHub Release and deploys it to demo (Vercel Preview). Check the job summary for the deployment URL - confirm the todo app loads and you can add/complete/delete a todo.
+- Note the tag it created (e.g. `v0.2.0`) - that's what you promote to production next:
+
+```bash
+gh workflow run promote-to-production.yaml -f tag=v0.2.0
 gh run watch
 ```
 
-Check the deployment URL in the run's job summary - confirm the todo app actually loads and you can add/complete/delete a todo.
-
-**b. A second release, crossing the two dummy migrations already in this repo:**
+**b. A second release, crossing the two dummy migrations already in this repo** (add a `feat:`/`fix:` commit touching anything, or another empty one):
 
 ```bash
-gh api repos/pruthvi145/pipeline-sandbox/releases -X POST \
-  -f tag_name=v1.1.0 -f target_commitish=main -F prerelease=true -f name=v1.1.0
-gh workflow run promote-to-production.yaml -f tag=v1.1.0
-gh run watch
+git commit --allow-empty -m "fix: exercise a second sandbox release"
+git push origin main
 ```
+
+Repeat the same merge-the-Release-PR step, then promote the new tag (e.g. `v0.3.0`) the same way as above.
 
 **c. Rollback dry run** (safe - resolves the target and checks the migration gate, deploys nothing):
 
@@ -105,9 +111,9 @@ gh workflow run rollback.yaml -f dry_run=true
 gh run watch
 ```
 
-Check the job summary - it should report v1.1.0 -> v1.0.0 with 2 migrations crossed (the priority column + its index).
+Check the job summary - it should report your latest tag -> the previous one with 2 migrations crossed (the priority column + its index).
 
-**d. Real rollback with `db_action: proceed`** (deploys v1.0.0's code against the current schema, no DB changes - safe, additive migrations only):
+**d. Real rollback with `db_action: proceed`** (deploys the previous tag's code against the current schema, no DB changes - safe, additive migrations only):
 
 ```bash
 gh workflow run rollback.yaml -f db_action=proceed
@@ -121,11 +127,11 @@ gh workflow run rollback.yaml -f db_action=restore -f confirm_restore=CONFIRM
 gh run watch
 ```
 
-Verify afterward: the `priority` column and its index should be gone (`\d todos` in `psql`, or Supabase Studio's table editor), and the app should still load fine with whatever todos existed before v1.1.0's migration ran.
+Verify afterward: the `priority` column and its index should be gone (`\d todos` in `psql`, or Supabase Studio's table editor), and the app should still load fine with whatever todos existed before the rolled-back migration ran.
 
 ## What's deliberately NOT included
 
-- **release-please.yaml** - the real one is tightly coupled to totalfamily's changelog/versioning conventions. Releases here are created manually via `gh api repos/.../releases` above instead. Worth building a real adapted version later if this sandbox proves useful long-term.
+- **release-please.yaml is now included**, adapted: `vercel-environment` is `preview` instead of `testing` (Vercel's custom named environments need a paid Pro/Enterprise plan, unavailable on this sandbox's Hobby account), no GitHub App bot token (uses the workflow's own `GITHUB_TOKEN` - required enabling "Allow GitHub Actions to create and approve pull requests" in Settings -> Actions -> General, already done), and the E2E/Allure/Slack/Jira-linking jobs are dropped (no test suite, no webhook, no Jira convention here). One real behavioral difference to expect: because it uses the default `GITHUB_TOKEN`, GitHub won't auto-chain a workflow run off of that token's own actions - so **you must manually merge the Release PR** (GitHub UI or `gh pr merge`) for the tag/release/demo-deploy step to fire. This matches the real flow's expectation anyway (a human reviews and merges the release PR).
 - **hotfix-release.yaml / hotfix-siding.yaml** - out of scope for this round; add later if needed.
 - **Slack notifications** - removed entirely, no webhook dependency.
 - **GitHub App bot token** - `mark-stable` steps use the workflow's own `GITHUB_TOKEN` instead.
