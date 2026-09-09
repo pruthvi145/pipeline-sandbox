@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.2.0...v0.2.1) (2026-09-09)
+
+
+### Bug Fixes
+
+* composite actions can't read vars.* directly, thread manage-network-window as an input ([1902f0c](https://github.com/pruthvi145/pipeline-sandbox/commit/1902f0c863153ac897c25044550828224568589b))
+
 ## [0.2.0](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.1.0...v0.2.0) (2026-09-09)
 
 
