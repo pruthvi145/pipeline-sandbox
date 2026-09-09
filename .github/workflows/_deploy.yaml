@@ -98,6 +98,7 @@ jobs:
           r2-backup-bucket: ${{ secrets.R2_DB_BACKUP_BUCKET }}
           r2-backup-access-key-id: ${{ secrets.R2_DB_BACKUP_ACCESS_KEY_ID }}
           r2-backup-secret-access-key: ${{ secrets.R2_DB_BACKUP_SECRET_ACCESS_KEY }}
+          manage-network-window: ${{ vars.MANAGE_NETWORK_WINDOW }}
 
       - name: Deploy to Vercel
         id: deploy

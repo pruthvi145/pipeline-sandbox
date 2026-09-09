@@ -11,13 +11,17 @@ inputs:
   baseline-cidrs:
     description: "Space-separated CIDRs the allow-list is restored to"
     required: true
+  manage-network-window:
+    description: "Whether to run the open/close dance at all ('true'/'false'). Composite actions can't read vars.* directly, so the calling workflow must pass this in from vars.MANAGE_NETWORK_WINDOW."
+    required: false
+    default: "false"
 
 runs:
   using: "composite"
   steps:
     # Mirrors open-db-network-window's gate - see that file for why.
     - name: Close migration window
-      if: vars.MANAGE_NETWORK_WINDOW == 'true'
+      if: inputs.manage-network-window == 'true'
       shell: bash
       env:
         SUPABASE_ACCESS_TOKEN: ${{ inputs.access-token }}

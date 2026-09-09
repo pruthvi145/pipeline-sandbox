@@ -11,17 +11,21 @@ inputs:
   baseline-cidrs:
     description: "Space-separated CIDRs the allow-list is restored to when the window closes"
     required: true
+  manage-network-window:
+    description: "Whether to run the open/close dance at all ('true'/'false'). Composite actions can't read vars.* directly, so the calling workflow must pass this in from vars.MANAGE_NETWORK_WINDOW."
+    required: false
+    default: "false"
 
 runs:
   using: "composite"
   steps:
     # Network restrictions are a paid-tier Supabase feature - most Hobby/Free
     # projects don't have any to manage, and calling this against one errors
-    # out. Gated on repo variable MANAGE_NETWORK_WINDOW (unset/false = skip
-    # entirely, direct DB access relies on the password alone). Set it to
-    # "true" only if your Supabase project actually has restrictions enabled.
+    # out. Gated on manage-network-window (unset/false = skip entirely, direct
+    # DB access relies on the password alone). Set it to "true" only if your
+    # Supabase project actually has restrictions enabled.
     - name: Open migration window
-      if: vars.MANAGE_NETWORK_WINDOW == 'true'
+      if: inputs.manage-network-window == 'true'
       shell: bash
       env:
         SUPABASE_ACCESS_TOKEN: ${{ inputs.access-token }}

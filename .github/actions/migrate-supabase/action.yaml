@@ -35,6 +35,10 @@ inputs:
   r2-backup-secret-access-key:
     required: false
     default: ""
+  manage-network-window:
+    description: "Whether to retry with the exact IP Supabase reports on a mismatch ('true'/'false'). Composite actions can't read vars.* directly, so this must be passed in from the calling workflow."
+    required: false
+    default: "false"
 
 runs:
   using: "composite"
@@ -44,6 +48,7 @@ runs:
         project-id: ${{ inputs.project-id }}
         access-token: ${{ inputs.access-token }}
         baseline-cidrs: ${{ inputs.baseline-cidrs }}
+        manage-network-window: ${{ inputs.manage-network-window }}
 
     - name: Link to Supabase project
       shell: bash
@@ -76,7 +81,7 @@ runs:
         SUPABASE_DB_PASSWORD: ${{ inputs.db-password }}
         BASELINE_CIDRS: ${{ inputs.baseline-cidrs }}
         PROJECT_ID: ${{ inputs.project-id }}
-        MANAGE_NETWORK_WINDOW: ${{ vars.MANAGE_NETWORK_WINDOW }}
+        MANAGE_NETWORK_WINDOW: ${{ inputs.manage-network-window }}
       run: |
         set -uo pipefail
         echo "🚀 Running database migrations..."
@@ -120,3 +125,4 @@ runs:
         project-id: ${{ inputs.project-id }}
         access-token: ${{ inputs.access-token }}
         baseline-cidrs: ${{ inputs.baseline-cidrs }}
+        manage-network-window: ${{ inputs.manage-network-window }}

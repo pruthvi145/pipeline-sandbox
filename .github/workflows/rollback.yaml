@@ -228,6 +228,7 @@ jobs:
           project-id: ${{ secrets.SUPABASE_PROJECT_ID }}
           access-token: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           baseline-cidrs: ${{ vars.SUPABASE_BASELINE_CIDRS }}
+          manage-network-window: ${{ vars.MANAGE_NETWORK_WINDOW }}
 
       - name: Restore database from snapshot
         id: restore
@@ -283,6 +284,7 @@ jobs:
           project-id: ${{ secrets.SUPABASE_PROJECT_ID }}
           access-token: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           baseline-cidrs: ${{ vars.SUPABASE_BASELINE_CIDRS }}
+          manage-network-window: ${{ vars.MANAGE_NETWORK_WINDOW }}
 
   find-deployment:
     needs: [resolve, restore-database]
