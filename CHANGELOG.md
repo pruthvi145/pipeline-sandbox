@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.2.1...v0.2.2) (2026-09-09)
+
+
+### Bug Fixes
+
+* revert network-window actions to match TF exactly, remove sandbox-only toggle ([11df357](https://github.com/pruthvi145/pipeline-sandbox/commit/11df357ac8d3f4b0ff18dad4b280f0b25a37bf05))
+
 ## [0.2.1](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.2.0...v0.2.1) (2026-09-09)
 
 
