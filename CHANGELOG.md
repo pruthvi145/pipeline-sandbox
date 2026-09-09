@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.2.2...v0.3.0) (2026-09-09)
+
+
+### Features
+
+* add notes field to todos ([991fe18](https://github.com/pruthvi145/pipeline-sandbox/commit/991fe18273b628f4b3f0be76e880f70b84ef69e4))
+
 ## [0.2.2](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.2.1...v0.2.2) (2026-09-09)
 
 
