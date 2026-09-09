@@ -338,8 +338,13 @@ jobs:
 
   deploy-instant-rollback:
     needs: [resolve, find-deployment]
+    # always(): the skip cascade from restore-database (skipped whenever
+    # db_action != 'restore') propagates through the WHOLE dependency chain,
+    # not just the one direct job after it - find-deployment succeeding
+    # doesn't stop it. Every job downstream of that first skip needs its own
+    # always().
     if: |
-      needs.resolve.result == 'success' && needs.find-deployment.result == 'success' &&
+      always() && needs.resolve.result == 'success' && needs.find-deployment.result == 'success' &&
       inputs.dry_run != true && needs.find-deployment.outputs.found == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -381,8 +386,9 @@ jobs:
 
   deploy-fallback:
     needs: [resolve, find-deployment]
+    # always(): same reasoning as deploy-instant-rollback above.
     if: |
-      needs.resolve.result == 'success' && needs.find-deployment.result == 'success' &&
+      always() && needs.resolve.result == 'success' && needs.find-deployment.result == 'success' &&
       inputs.dry_run != true && needs.find-deployment.outputs.found != 'true'
     uses: ./.github/workflows/_deploy.yaml
     with:
