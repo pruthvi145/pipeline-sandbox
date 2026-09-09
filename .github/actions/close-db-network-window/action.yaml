@@ -11,17 +11,17 @@ inputs:
   baseline-cidrs:
     description: "Space-separated CIDRs the allow-list is restored to"
     required: true
-  manage-network-window:
-    description: "Whether to run the open/close dance at all ('true'/'false'). Composite actions can't read vars.* directly, so the calling workflow must pass this in from vars.MANAGE_NETWORK_WINDOW."
-    required: false
-    default: "false"
 
+# Split out of migrate-supabase so restore-database (rollback.yaml) can close the
+# same allow-list window it opened via open-db-network-window, without
+# duplicating this dance a third time. Behavior is unchanged from
+# migrate-supabase's original inline step. Callers must run this with
+# `if: always()` - a window left open would allow a recycled GitHub runner
+# address until the next deploy or the drift check.
 runs:
   using: "composite"
   steps:
-    # Mirrors open-db-network-window's gate - see that file for why.
     - name: Close migration window
-      if: inputs.manage-network-window == 'true'
       shell: bash
       env:
         SUPABASE_ACCESS_TOKEN: ${{ inputs.access-token }}

@@ -1,5 +1,5 @@
 name: Migrate Supabase Database
-description: Run Supabase migrations against any environment (testing/production)
+description: Run Supabase migrations against any environment (dev/test/prod)
 
 inputs:
   project-id:
@@ -12,54 +12,64 @@ inputs:
     description: "Supabase database password"
     required: true
   baseline-cidrs:
-    description: "Space-separated CIDRs the allow-list is restored to after migrating (only used if vars.MANAGE_NETWORK_WINDOW is true)"
-    required: false
-    default: ""
+    description: "Space-separated CIDRs the allow-list is restored to after migrating"
+    required: true
   take-snapshot:
-    description: 'Dump public/supabase_migrations and upload to R2 before migrating ("true"/"false")'
+    description: 'Dump public/stripe/audit/supabase_migrations and upload to R2 before migrating ("true"/"false")'
     required: false
     default: "false"
   release-tag:
-    description: "Release tag used to name the snapshot object in R2 (e.g. v1.0.0). Required when take-snapshot is true."
+    description: "Release tag used to name the snapshot object in R2 (e.g. v1.8.2). Required when take-snapshot is true."
     required: false
     default: ""
   r2-account-id:
+    description: "Cloudflare account ID used to build the R2 endpoint. Required when take-snapshot is true."
     required: false
     default: ""
   r2-backup-bucket:
+    description: "R2 bucket name for database snapshots. Required when take-snapshot is true."
     required: false
     default: ""
   r2-backup-access-key-id:
+    description: "R2 access key ID for the snapshot bucket. Required when take-snapshot is true."
     required: false
     default: ""
   r2-backup-secret-access-key:
+    description: "R2 secret access key for the snapshot bucket. Required when take-snapshot is true."
     required: false
     default: ""
-  manage-network-window:
-    description: "Whether to retry with the exact IP Supabase reports on a mismatch ('true'/'false'). Composite actions can't read vars.* directly, so this must be passed in from the calling workflow."
-    required: false
-    default: "false"
 
+# No setup-cli step: callers run `npm ci` first, so `npx supabase` resolves the
+# devDependency in package.json. A separately pinned binary was silently ignored
+# by npx, meaning the pin never described the version that actually ran.
 runs:
   using: "composite"
   steps:
+    # Opens before `link`, not just before `db push`, because `link` also opens
+    # a Postgres connection. Supabase reads an empty allow-list as "restrictions
+    # off", so an unset baseline would silently disable the control instead of
+    # failing - hence the guard.
     - uses: ./.github/actions/open-db-network-window
       with:
         project-id: ${{ inputs.project-id }}
         access-token: ${{ inputs.access-token }}
         baseline-cidrs: ${{ inputs.baseline-cidrs }}
-        manage-network-window: ${{ inputs.manage-network-window }}
 
     - name: Link to Supabase project
       shell: bash
       env:
         SUPABASE_ACCESS_TOKEN: ${{ inputs.access-token }}
         SUPABASE_DB_PASSWORD: ${{ inputs.db-password }}
+        BASELINE_CIDRS: ${{ inputs.baseline-cidrs }}
         PROJECT_ID: ${{ inputs.project-id }}
       run: |
         echo "🔗 Linking to Supabase project ${PROJECT_ID}..."
         npx supabase link --project-ref "$PROJECT_ID"
 
+    # Runs inside the same open window as `link`/`db push` above - opening a
+    # second window just for this would race Supabase's allow-list replace
+    # semantics against a concurrent deploy (see the concurrency group note on
+    # _deploy.yaml's deploy job).
     - name: Snapshot database before migration
       if: inputs.take-snapshot == 'true'
       shell: bash
@@ -81,7 +91,6 @@ runs:
         SUPABASE_DB_PASSWORD: ${{ inputs.db-password }}
         BASELINE_CIDRS: ${{ inputs.baseline-cidrs }}
         PROJECT_ID: ${{ inputs.project-id }}
-        MANAGE_NETWORK_WINDOW: ${{ inputs.manage-network-window }}
       run: |
         set -uo pipefail
         echo "🚀 Running database migrations..."
@@ -92,10 +101,14 @@ runs:
         fi
         echo "$OUT"
 
-        if [ "${MANAGE_NETWORK_WINDOW:-}" != "true" ] || [ -z "${BASELINE_CIDRS// /}" ]; then
-          exit 1
-        fi
-
+        # The window was opened for whatever api.ipify.org reported, but the
+        # database admits on the address it actually sees, and those can differ
+        # behind a proxy or NAT. The refusal names the address Supabase saw, so
+        # reopen for that one and retry rather than failing the deploy.
+        #
+        # This guard lives here, not on `link`: as of CLI 2.113.0 `link` only
+        # writes the project ref and never opens a Postgres connection, so a
+        # blocked address first surfaces on push.
         SEEN="$(sed -n 's/.*allow_list: {\([0-9, ]*\)}.*/\1/p' <<<"$OUT" | head -1 | tr -d ' ' | tr ',' '.')"
         if [ -z "$SEEN" ]; then
           exit 1
@@ -119,10 +132,11 @@ runs:
         npx supabase db push
         echo "✅ Database migrations completed successfully"
 
+    # always(): a window left open would allow a recycled GitHub runner address
+    # until the next deploy or the drift check.
     - if: always()
       uses: ./.github/actions/close-db-network-window
       with:
         project-id: ${{ inputs.project-id }}
         access-token: ${{ inputs.access-token }}
         baseline-cidrs: ${{ inputs.baseline-cidrs }}
-        manage-network-window: ${{ inputs.manage-network-window }}

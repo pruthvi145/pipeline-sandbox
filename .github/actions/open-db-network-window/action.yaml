@@ -11,21 +11,15 @@ inputs:
   baseline-cidrs:
     description: "Space-separated CIDRs the allow-list is restored to when the window closes"
     required: true
-  manage-network-window:
-    description: "Whether to run the open/close dance at all ('true'/'false'). Composite actions can't read vars.* directly, so the calling workflow must pass this in from vars.MANAGE_NETWORK_WINDOW."
-    required: false
-    default: "false"
 
+# Split out of migrate-supabase so restore-database (rollback.yaml) can open the
+# same allow-list window for a direct psql connection without duplicating this
+# dance a third time. Behavior is unchanged from migrate-supabase's original
+# inline step.
 runs:
   using: "composite"
   steps:
-    # Network restrictions are a paid-tier Supabase feature - most Hobby/Free
-    # projects don't have any to manage, and calling this against one errors
-    # out. Gated on manage-network-window (unset/false = skip entirely, direct
-    # DB access relies on the password alone). Set it to "true" only if your
-    # Supabase project actually has restrictions enabled.
     - name: Open migration window
-      if: inputs.manage-network-window == 'true'
       shell: bash
       env:
         SUPABASE_ACCESS_TOKEN: ${{ inputs.access-token }}
@@ -44,6 +38,9 @@ runs:
         npx supabase network-restrictions update --project-ref "$PROJECT_ID" \
           "${FLAGS[@]}" --db-allow-cidr "${RUNNER_IP}/32" --experimental
 
+        # Read status from the Management API rather than the CLI's printed text:
+        # `get` ignores --output json, so matching its wording would break silently
+        # on a CLI upgrade, and the version floats with package.json.
         for _ in $(seq 1 20); do
           STATUS="$(curl -sS --max-time 10 \
             -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
