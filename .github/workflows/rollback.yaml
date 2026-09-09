@@ -286,8 +286,13 @@ jobs:
 
   find-deployment:
     needs: [resolve, restore-database]
+    # always(): restore-database is *designed* to be skipped whenever
+    # db_action != 'restore' - without always(), GitHub's default needs-chain
+    # behavior skips this job (and everything after it) any time a needed job
+    # was skipped, regardless of this custom condition. See mark-stable for
+    # the same pattern.
     if: |
-      needs.resolve.result == 'success' && inputs.dry_run != true &&
+      always() && needs.resolve.result == 'success' && inputs.dry_run != true &&
       (inputs.db_action != 'restore' || needs.restore-database.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -397,8 +402,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [resolve, deploy-instant-rollback, deploy-fallback]
+    # always(): exactly one of deploy-instant-rollback/deploy-fallback is
+    # *designed* to be skipped every single run (they're mutually exclusive
+    # paths) - without always(), GitHub's default needs-chain behavior skips
+    # this job every time, since it always has at least one skipped need.
     if: |
-      inputs.dry_run != true &&
+      always() && inputs.dry_run != true &&
       (needs.deploy-instant-rollback.result == 'success' || needs.deploy-fallback.result == 'success')
     permissions:
       contents: write
