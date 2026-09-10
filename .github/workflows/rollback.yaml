@@ -13,12 +13,7 @@ on:
         default: ""
         type: string
       db_action:
-        description: "Only required when a database migration boundary is crossed. 'proceed' deploys old code against the current, additive-only schema. 'restore' restores the database to the snapshot taken right before the live release's migration ran, then deploys the old code."
-        required: false
-        default: ""
-        type: string
-      confirm_restore:
-        description: "⚠️ This restores the database to an earlier snapshot. Any todos added after that snapshot are lost. Type CONFIRM to proceed."
+        description: "Only required when a database migration boundary is crossed. 'proceed' deploys old code against the current, additive-only schema. 'restore' is recognized but NOT implemented - this sandbox is app-code-only rollback."
         required: false
         default: ""
         type: string
@@ -117,7 +112,6 @@ jobs:
           MIGRATION_BOUNDARY: ${{ steps.diff.outputs.migration_boundary }}
           MIGRATED_FILES_COUNT: ${{ steps.diff.outputs.migrated_files_count }}
           DB_ACTION: ${{ inputs.db_action }}
-          CONFIRM_RESTORE: ${{ inputs.confirm_restore }}
         with:
           script: |
             const targetTag = process.env.TARGET_TAG;
@@ -164,21 +158,11 @@ jobs:
             }
 
             if (dbAction === 'restore') {
-              const confirmRestore = process.env.CONFIRM_RESTORE;
-              if (confirmRestore !== 'CONFIRM') {
-                core.setOutput('gate_status', 'blocked-restore-unconfirmed');
-                core.setFailed(
-                  'Restore not confirmed. This permanently erases all data written after the ' +
-                  'snapshot - type CONFIRM in the confirm_restore field if you\'re certain this is correct.'
-                );
-                return;
-              }
-              core.setOutput('gate_status', 'ok');
-              core.warning(
-                `Migration boundary crossed rolling back to ${targetTag} - proceeding with a ` +
-                `database restore (db_action=restore, confirmed). The database will be restored to ` +
-                `the snapshot taken before ${liveTag}'s migration ran, then ${targetTag}'s code will ` +
-                `be deployed.`
+              core.setOutput('gate_status', 'blocked-restore');
+              core.setFailed(
+                "This rollback crosses a database migration and needs a restore, which isn't " +
+                "implemented in this sandbox - it's app-code-only rollback. If you're certain the " +
+                "migration was additive-only and old code is compatible, re-run with db_action: proceed instead."
               );
               return;
             }
@@ -189,111 +173,13 @@ jobs:
               'db_action to \'proceed\' to continue (only safe for additive-only migrations).'
             );
 
-  restore-database:
-    needs: resolve
-    if: |
-      needs.resolve.result == 'success' && inputs.db_action == 'restore' &&
-      inputs.dry_run != true
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: production
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-environment
-
-      - name: Determine snapshot to restore
-        id: snapshot
-        env:
-          LIVE_TAG: ${{ needs.resolve.outputs.live_tag }}
-        run: |
-          set -euo pipefail
-          echo "Restoring the snapshot taken before ${LIVE_TAG}'s migration ran (undoes that release's DB change)."
-          echo "out_file=${{ runner.temp }}/${LIVE_TAG}.dump" >> "$GITHUB_OUTPUT"
-
-      - name: Download snapshot from R2
-        id: download
-        env:
-          SNAPSHOT_TAG: ${{ needs.resolve.outputs.live_tag }}
-          SNAPSHOT_OUT_FILE: ${{ steps.snapshot.outputs.out_file }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_DB_BACKUP_BUCKET: ${{ secrets.R2_DB_BACKUP_BUCKET }}
-          R2_DB_BACKUP_ACCESS_KEY_ID: ${{ secrets.R2_DB_BACKUP_ACCESS_KEY_ID }}
-          R2_DB_BACKUP_SECRET_ACCESS_KEY: ${{ secrets.R2_DB_BACKUP_SECRET_ACCESS_KEY }}
-        run: node .github/scripts/db-snapshot-download.mjs
-
-      - uses: ./.github/actions/open-db-network-window
-        with:
-          project-id: ${{ secrets.SUPABASE_PROJECT_ID }}
-          access-token: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          baseline-cidrs: ${{ vars.SUPABASE_BASELINE_CIDRS }}
-
-      - name: Restore database from snapshot
-        id: restore
-        env:
-          PGHOST: db.${{ secrets.SUPABASE_PROJECT_ID }}.supabase.co
-          PGPORT: "5432"
-          PGUSER: postgres
-          PGDATABASE: postgres
-          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-          DUMP_FILE: ${{ steps.snapshot.outputs.out_file }}
-        run: |
-          set -euo pipefail
-          command -v psql >/dev/null || { sudo apt-get update && sudo apt-get install -y postgresql-client; }
-
-          echo "🗑️  Dropping supabase_migrations/public before restore..."
-          for schema in supabase_migrations public; do
-            psql -v ON_ERROR_STOP=1 -c "DROP SCHEMA IF EXISTS \"${schema}\" CASCADE; CREATE SCHEMA \"${schema}\";"
-          done
-
-          psql -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;"
-
-          echo "♻️  Restoring ${DUMP_FILE}..."
-          psql -v ON_ERROR_STOP=1 -f "$DUMP_FILE"
-          echo "✅ Restore complete"
-
-      - name: Reconcile post-restore
-        if: steps.restore.outcome == 'success'
-        env:
-          PGHOST: db.${{ secrets.SUPABASE_PROJECT_ID }}.supabase.co
-          PGPORT: "5432"
-          PGUSER: postgres
-          PGDATABASE: postgres
-          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-          SNAPSHOT_TAKEN_AT: ${{ steps.download.outputs.snapshot_taken_at }}
-        run: |
-          set -euo pipefail
-          OUT="$(psql -v ON_ERROR_STOP=1 -v snapshot_ts="'${SNAPSHOT_TAKEN_AT}'" \
-            -f .github/scripts/reconcile-post-restore.sql 2>&1)"
-          echo "$OUT"
-
-          RELINKED="$(grep -o 'RECONCILE_RELINKED_COUNT=[0-9]*' <<<"$OUT" | tail -1 | cut -d= -f2)"
-          SELF_SIGNUP="$(grep -o 'RECONCILE_SELF_SIGNUP_NO_ACTION_COUNT=[0-9]*' <<<"$OUT" | tail -1 | cut -d= -f2)"
-          {
-            echo "## ♻️ Post-Restore Reconciliation"
-            echo ""
-            echo "**Snapshot cutoff:** ${SNAPSHOT_TAKEN_AT}"
-            echo "**Todos added after snapshot (informational only):** ${SELF_SIGNUP:-0}"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - if: always()
-        uses: ./.github/actions/close-db-network-window
-        with:
-          project-id: ${{ secrets.SUPABASE_PROJECT_ID }}
-          access-token: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          baseline-cidrs: ${{ vars.SUPABASE_BASELINE_CIDRS }}
-
   find-deployment:
-    needs: [resolve, restore-database]
-    # always(): restore-database is *designed* to be skipped whenever
-    # db_action != 'restore' - without always(), GitHub's default needs-chain
-    # behavior skips this job (and everything after it) any time a needed job
-    # was skipped, regardless of this custom condition. See mark-stable for
-    # the same pattern.
-    if: |
-      always() && needs.resolve.result == 'success' && inputs.dry_run != true &&
-      (inputs.db_action != 'restore' || needs.restore-database.result == 'success')
+    needs: resolve
+    # A job's own `if:` replaces GitHub's default "needs succeeded" check,
+    # not adds to it - without needs.resolve.result here, a deliberately
+    # failed gate (core.setFailed on an unconfirmed migration boundary)
+    # would not stop this job or the deploy jobs after it from running.
+    if: needs.resolve.result == 'success' && inputs.dry_run != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -338,13 +224,8 @@ jobs:
 
   deploy-instant-rollback:
     needs: [resolve, find-deployment]
-    # always(): the skip cascade from restore-database (skipped whenever
-    # db_action != 'restore') propagates through the WHOLE dependency chain,
-    # not just the one direct job after it - find-deployment succeeding
-    # doesn't stop it. Every job downstream of that first skip needs its own
-    # always().
     if: |
-      always() && needs.resolve.result == 'success' && needs.find-deployment.result == 'success' &&
+      needs.resolve.result == 'success' && needs.find-deployment.result == 'success' &&
       inputs.dry_run != true && needs.find-deployment.outputs.found == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -384,11 +265,16 @@ jobs:
             echo "**Alias:** ${{ vars.PROD_ALIAS }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Only reached when Vercel no longer has a matching prior deployment to
+  # instant-rollback to (pruned, or never built with this exact output -
+  # e.g. a very old tag). Rebuilds and deploys like a normal promote, but
+  # with migrations forced off - the resolve job's gate already established
+  # that either no migration boundary exists, or the operator explicitly
+  # accepted deploying old code against the current schema.
   deploy-fallback:
     needs: [resolve, find-deployment]
-    # always(): same reasoning as deploy-instant-rollback above.
     if: |
-      always() && needs.resolve.result == 'success' && needs.find-deployment.result == 'success' &&
+      needs.resolve.result == 'success' && needs.find-deployment.result == 'success' &&
       inputs.dry_run != true && needs.find-deployment.outputs.found != 'true'
     uses: ./.github/workflows/_deploy.yaml
     with:
@@ -412,6 +298,9 @@ jobs:
     # *designed* to be skipped every single run (they're mutually exclusive
     # paths) - without always(), GitHub's default needs-chain behavior skips
     # this job every time, since it always has at least one skipped need.
+    # Confirmed via GitHub's own docs: a skipped job in `needs:` skips every
+    # downstream job unless its `if:` starts with always(). This is a real
+    # bug in the actual PR #1670 branch too, not sandbox-only.
     if: |
       always() && inputs.dry_run != true &&
       (needs.deploy-instant-rollback.result == 'success' || needs.deploy-fallback.result == 'success')

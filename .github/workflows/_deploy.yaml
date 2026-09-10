@@ -29,11 +29,6 @@ on:
         required: false
         type: boolean
         default: true
-      take-snapshot:
-        description: "Dump the database to R2 before migrating (production only)"
-        required: false
-        type: boolean
-        default: false
       ref:
         description: "Git ref to check out (tag, branch, or SHA). Defaults to github.ref."
         required: false
@@ -47,14 +42,6 @@ on:
       SUPABASE_PROJECT_ID:
         required: false
       SUPABASE_DB_PASSWORD:
-        required: false
-      R2_ACCOUNT_ID:
-        required: false
-      R2_DB_BACKUP_BUCKET:
-        required: false
-      R2_DB_BACKUP_ACCESS_KEY_ID:
-        required: false
-      R2_DB_BACKUP_SECRET_ACCESS_KEY:
         required: false
     outputs:
       deployment-url:
@@ -92,12 +79,6 @@ jobs:
           access-token: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           db-password: ${{ secrets.SUPABASE_DB_PASSWORD }}
           baseline-cidrs: ${{ vars.SUPABASE_BASELINE_CIDRS }}
-          take-snapshot: ${{ inputs.take-snapshot && 'true' || 'false' }}
-          release-tag: ${{ inputs.ref }}
-          r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
-          r2-backup-bucket: ${{ secrets.R2_DB_BACKUP_BUCKET }}
-          r2-backup-access-key-id: ${{ secrets.R2_DB_BACKUP_ACCESS_KEY_ID }}
-          r2-backup-secret-access-key: ${{ secrets.R2_DB_BACKUP_SECRET_ACCESS_KEY }}
 
       - name: Deploy to Vercel
         id: deploy
