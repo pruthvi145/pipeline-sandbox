@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.4.0](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.3.0...v0.4.0) (2026-09-10)
+
+
+### Features
+
+* add development environment, deployed on every push to main ([#8](https://github.com/pruthvi145/pipeline-sandbox/issues/8)) ([d27cffd](https://github.com/pruthvi145/pipeline-sandbox/commit/d27cffd33090d17d241fd1ce8eb9f3b70117ccaa))
+* rebuild sandbox as app-code-only rollback (PR [#1684](https://github.com/pruthvi145/pipeline-sandbox/issues/1684) cancelled) ([11fd865](https://github.com/pruthvi145/pipeline-sandbox/commit/11fd865aba64f031c70165d0bfdb084c013265b3))
+
+
+### Bug Fixes
+
+* add always() to find-deployment and mark-stable ([954d011](https://github.com/pruthvi145/pipeline-sandbox/commit/954d01101f6e5553157fa1af21a7368cd3678133))
+* skip-cascade propagates through the whole chain, not just one hop ([637e40e](https://github.com/pruthvi145/pipeline-sandbox/commit/637e40e74cda401603d5379e5528fd030c255493))
+
+
+### Refactoring
+
+* drastically simplify application-code-rollback ([914bff4](https://github.com/pruthvi145/pipeline-sandbox/commit/914bff4f37991617ef258ac4e854f90f63bd3779))
+* drastically simplify application-code-rollback ([#6](https://github.com/pruthvi145/pipeline-sandbox/issues/6)) ([2c13089](https://github.com/pruthvi145/pipeline-sandbox/commit/2c1308984123d5d37eb4c2dfad078954275458f7))
+* rename rollback.yaml to application-code-rollback.yaml, matching totalfamily/app PR [#1670](https://github.com/pruthvi145/pipeline-sandbox/issues/1670) ([ee23e27](https://github.com/pruthvi145/pipeline-sandbox/commit/ee23e277dd39eb3879b6faa8978a2c03c318af04))
+
+
+### Tests
+
+* match application-code-rollback.yaml exactly to PR [#1670](https://github.com/pruthvi145/pipeline-sandbox/issues/1670) ([#7](https://github.com/pruthvi145/pipeline-sandbox/issues/7)) ([f3fc52e](https://github.com/pruthvi145/pipeline-sandbox/commit/f3fc52e73403ab83bcea35bb5789e8866b1c4eaa))
+
 ## [0.3.0](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.2.2...v0.3.0) (2026-09-09)
 
 
