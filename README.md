@@ -67,7 +67,7 @@ for ENV in production testing; do
 done
 ```
 
-(This sandbox uses ONE real Supabase project for both `production` and `testing` environment secrets, since you only have one. That's fine here - the two GitHub Environments still exist to prove `rollback.yaml`'s `environment: production` binding works, which was one of the real bugs found in totalfamily/app.)
+(This sandbox uses ONE real Supabase project for both `production` and `testing` environment secrets, since you only have one. That's fine here - the two GitHub Environments still exist to prove `application-code-rollback.yaml`'s `environment: production` binding works, which was one of the real bugs found in totalfamily/app.)
 
 ### 4. Prove the pipeline, in order
 
@@ -100,7 +100,7 @@ Repeat the same merge-the-Release-PR step, then promote the new tag the same way
 **c. Rollback dry run** (safe - resolves the target and checks the migration gate, deploys nothing):
 
 ```bash
-gh workflow run rollback.yaml -f dry_run=true
+gh workflow run application-code-rollback.yaml -f dry_run=true
 gh run watch
 ```
 
@@ -109,7 +109,7 @@ Check the job summary - it should report your latest tag -> the previous one, an
 **d. Real rollback with `db_action: proceed`** (deploys the previous tag's code against the current schema, no DB changes - safe, additive migrations only):
 
 ```bash
-gh workflow run rollback.yaml -f db_action=proceed
+gh workflow run application-code-rollback.yaml -f db_action=proceed
 gh run watch
 ```
 

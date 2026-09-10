@@ -1,4 +1,4 @@
-name: "Release: Rollback Production"
+name: "Release: Application Code Rollback"
 
 # Pipeline: resolve target + migration gate → (instant Vercel rollback |
 # full rebuild fallback) → mark-stable. Never runs alongside a promote or
