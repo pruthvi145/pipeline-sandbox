@@ -8,12 +8,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Exact release tag to roll back to (e.g. v1.0.0). Leave blank to auto-resolve to the release before the current live one."
+        description: "Exact release tag to roll back to (e.g. v1.7.4). Leave blank to auto-resolve to the release before the current live one."
         required: false
         default: ""
         type: string
       db_action:
-        description: "Only required when a database migration boundary is crossed. 'proceed' deploys old code against the current, additive-only schema. 'restore' is recognized but NOT implemented - this sandbox is app-code-only rollback."
+        description: "Only required when a database migration boundary is crossed. 'proceed' deploys old code against the current, additive-only schema. 'restore' is recognized but NOT implemented yet (ships in a follow-up PR)."
         required: false
         default: ""
         type: string
@@ -43,8 +43,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
-
       - name: Find current live release + all stable releases
         id: live
         uses: actions/github-script@v9
@@ -60,6 +58,8 @@ jobs:
               repo: context.repo.repo,
               per_page: 100,
             });
+            // listReleases is already newest → oldest by published_at, which
+            // resolveRollbackTarget's auto-resolve relies on.
             const stable = all
               .filter((r) => !r.draft && !r.prerelease)
               .map((r) => ({ tag: r.tag_name, publishedAt: r.published_at }));
@@ -77,30 +77,54 @@ jobs:
           releases: ${{ steps.live.outputs.releases }}
           changed-files: "[]"
 
+      # Migrations "crossed" by the rollback are the ones present between the
+      # target and the live release - i.e. migrations that already ran against
+      # production (as part of shipping live) but the target's code predates.
+      #
+      # The boundary check (migrationFiles.length > 0) is inlined here rather
+      # than calling resolve-rollback-target a second time - the composite
+      # action's tag resolution is deterministic given the same inputs, so a
+      # second call would just repeat the resolve-tag step's work for no new
+      # information.
       - name: Diff supabase/migrations between target and live
         id: diff
+        uses: actions/github-script@v9
         env:
           TARGET_TAG: ${{ steps.resolve-tag.outputs.tag }}
           LIVE_TAG: ${{ steps.live.outputs.live_tag }}
-        run: |
-          set -euo pipefail
+        with:
+          script: |
+            // tags/ prefix forces tag resolution - without it, a branch
+            // sharing a tag's name would win, comparing the wrong commits.
+            const { data: compare } = await github.rest.repos.compareCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              base: `tags/${process.env.TARGET_TAG}`,
+              head: `tags/${process.env.LIVE_TAG}`,
+            });
+            const files = compare.files || [];
 
-          git fetch --depth=1 origin \
-            "refs/tags/${TARGET_TAG}:refs/tags/${TARGET_TAG}" \
-            "refs/tags/${LIVE_TAG}:refs/tags/${LIVE_TAG}"
+            // GitHub's compare API caps `files` at 300 entries with no
+            // truncation flag - hitting exactly 300 means there may be more
+            // we never saw. Fail closed rather than risk missing a migration
+            // outside that window and reporting a false "no boundary".
+            if (files.length === 300) {
+              core.setFailed(
+                'The diff between the rollback target and the live release touched 300+ files - ' +
+                "GitHub's compare API caps the file list there, so migrations beyond that point " +
+                'may be missing from this check. Pick a closer rollback target, or verify ' +
+                'supabase/migrations/ manually between these two tags before proceeding.'
+              );
+              return;
+            }
 
-          MIGRATION_FILES="$(git diff --name-only "refs/tags/${TARGET_TAG}..refs/tags/${LIVE_TAG}" -- supabase/migrations/)"
-          COUNT="$(printf '%s\n' "$MIGRATION_FILES" | grep -c . || true)"
+            const migrationFiles = files
+              .map((f) => f.filename)
+              .filter((f) => f.startsWith('supabase/migrations/'));
 
-          if [ -n "$MIGRATION_FILES" ]; then
-            echo "Migrations crossed between ${TARGET_TAG} and ${LIVE_TAG}:"
-            echo "$MIGRATION_FILES"
-          else
-            echo "No migrations crossed between ${TARGET_TAG} and ${LIVE_TAG}."
-          fi
-
-          echo "migrated_files_count=${COUNT}" >> "$GITHUB_OUTPUT"
-          echo "migration_boundary=$([ "$COUNT" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+            core.setOutput('changed_files', JSON.stringify(migrationFiles));
+            core.setOutput('migrated_files_count', String(migrationFiles.length));
+            core.setOutput('migration_boundary', String(migrationFiles.length > 0));
 
       - name: Print rollback summary + enforce migration gate
         id: gate-check
@@ -161,8 +185,8 @@ jobs:
               core.setOutput('gate_status', 'blocked-restore');
               core.setFailed(
                 "This rollback crosses a database migration and needs a restore, which isn't " +
-                "implemented in this sandbox - it's app-code-only rollback. If you're certain the " +
-                "migration was additive-only and old code is compatible, re-run with db_action: proceed instead."
+                "implemented yet - that ships in a follow-up PR. If you're certain the migration " +
+                "was additive-only and old code is compatible, re-run with db_action: proceed instead."
               );
               return;
             }
@@ -209,6 +233,17 @@ jobs:
           COMMIT_SHA: ${{ steps.sha.outputs.sha }}
         run: |
           set -euo pipefail
+          # Vercel's Instant Rollback re-aliases production to an already-built
+          # deployment without a rebuild - it's the fast, safe path since it
+          # can't produce a build that differs from what already ran on
+          # production. It only works when that exact deployment still exists
+          # (Vercel prunes old ones over time), so we look it up by the git
+          # commit the target tag points at via its `meta.githubCommitSha`
+          # (set on every deploy by deploy-to-vercel's VERCEL_GIT_COMMIT_SHA
+          # env var) and fall back to a full rebuild when it's gone.
+          # teamId wants an opaque team ID; total-family is the team's slug
+          # (visible in vercel.com/total-family/... URLs), so it belongs in
+          # the slug param instead.
           RESPONSE=$(curl -sf --connect-timeout 5 --max-time 15 \
             -H "Authorization: Bearer $VERCEL_TOKEN" \
             "https://api.vercel.com/v6/deployments?projectId=${{ vars.VERCEL_PROJECT }}&target=production&state=READY&slug=${{ vars.VERCEL_SCOPE }}&meta-githubCommitSha=${COMMIT_SHA}&limit=1")
@@ -281,37 +316,40 @@ jobs:
       environment: production
       vercel-environment: production
       vercel-production: true
-      vercel-project-id: ${{ vars.VERCEL_PROJECT }}
       run-migration: false
       vercel-alias: ${{ vars.PROD_ALIAS }}
       ref: ${{ needs.resolve.outputs.target_tag }}
     secrets:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
-  # Sandbox simplification: default GITHUB_TOKEN instead of a GitHub App
-  # token - see the matching note in promote-to-production.yaml.
   mark-stable:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [resolve, deploy-instant-rollback, deploy-fallback]
-    # always(): exactly one of deploy-instant-rollback/deploy-fallback is
-    # *designed* to be skipped every single run (they're mutually exclusive
-    # paths) - without always(), GitHub's default needs-chain behavior skips
-    # this job every time, since it always has at least one skipped need.
-    # Confirmed via GitHub's own docs: a skipped job in `needs:` skips every
-    # downstream job unless its `if:` starts with always(). This is a real
-    # bug in the actual PR #1670 branch too, not sandbox-only.
     if: |
-      always() && inputs.dry_run != true &&
+      inputs.dry_run != true &&
       (needs.deploy-instant-rollback.result == 'success' || needs.deploy-fallback.result == 'success')
     permissions:
-      contents: write
+      # Read-only: the release update below runs on the GitHub App token from
+      # create-github-app-token, not this job's own GITHUB_TOKEN.
+      contents: read
     steps:
+      # client-id (not app-id) is correct here - app-id is the deprecated
+      # input per the action's own action.yml. Some linters/reviewers bundle
+      # an outdated schema and flag this as invalid; it isn't.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
       - name: Mark rollback target as the latest stable release
         uses: actions/github-script@v9
         env:
           TARGET_TAG: ${{ needs.resolve.outputs.target_tag }}
         with:
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const tag = process.env.TARGET_TAG;
             const { data: release } = await github.rest.repos.getReleaseByTag({
