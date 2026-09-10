@@ -264,7 +264,23 @@ jobs:
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           DEPLOYMENT_ID: ${{ needs.find-deployment.outputs.deployment_id }}
-        run: npx vercel rollback "$DEPLOYMENT_ID" --scope=${{ vars.VERCEL_SCOPE }} --token="$VERCEL_TOKEN" --yes
+        run: |
+          set +e
+          OUTPUT=$(npx vercel rollback "$DEPLOYMENT_ID" --scope=${{ vars.VERCEL_SCOPE }} --token="$VERCEL_TOKEN" --yes 2>&1)
+          STATUS=$?
+          echo "$OUTPUT"
+          if [ $STATUS -ne 0 ]; then
+            # Vercel rejects "rolling back" to whatever's already live (422).
+            # A retry after mark-stable failed/didn't run - so GitHub's "latest"
+            # never flipped even though this deploy already went out - re-resolves
+            # the same target and lands here. Nothing left to deploy; treat it as
+            # done so mark-stable can still catch GitHub up.
+            if echo "$OUTPUT" | grep -q "is the current production deployment"; then
+              echo "::notice::${DEPLOYMENT_ID} is already the live production deployment - nothing to roll back, continuing."
+              exit 0
+            fi
+            exit $STATUS
+          fi
 
       - name: Rollback Summary
         env:
