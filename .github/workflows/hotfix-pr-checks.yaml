@@ -1,0 +1,109 @@
+name: "Hotfix PR: Required Checks"
+
+# Required checks for PRs opened against a release/vX.Y.Z branch (i.e.
+# hotfix PRs). Correctness of "this hotfix is really based on the current
+# production release" is verified live here rather than trusted from the
+# branch it targets.
+#
+# Ported from totalfamily/app PR #1717 verbatim - this file needs no
+# sandbox adaptation, it never touches a GitHub App token or any Vercel/
+# Supabase/Slack dependency.
+on:
+  pull_request:
+    branches: ["release/v*"]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  ancestor-check:
+    name: Verify hotfix is based on the current production release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Confirm ancestry against the latest stable release
+        uses: actions/github-script@v9
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        with:
+          script: |
+            const headSha = process.env.HEAD_SHA;
+            const baseBranch = process.env.BASE_BRANCH;
+
+            let latestTag;
+            try {
+              const { data: latest } = await github.rest.repos.getLatestRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+              });
+              latestTag = latest.tag_name;
+            } catch (err) {
+              if (err.status !== 404) throw err;
+              core.info('No stable release found yet - skipping ancestor check (first hotfix ever)');
+              return;
+            }
+
+            // A head branched off main is always "ahead" of every past release
+            // tag, so the compareCommits check below would pass even for a PR
+            // aimed at a superseded release branch. Reject the wrong target
+            // explicitly instead of relying on ancestry alone.
+            const expectedBranch = `release/${latestTag}`;
+            if (baseBranch !== expectedBranch) {
+              core.setFailed(
+                `This hotfix targets "${baseBranch}", but production is on "${latestTag}". ` +
+                `Re-target this PR at "${expectedBranch}".`
+              );
+              return;
+            }
+
+            const { data: compare } = await github.rest.repos.compareCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              base: latestTag,
+              head: headSha,
+            });
+
+            if (!['ahead', 'identical'].includes(compare.status)) {
+              core.setFailed(
+                `This hotfix (${headSha.substring(0, 7)}) is not based on the current production release ` +
+                `"${latestTag}" (comparison status: ${compare.status}). Production has moved on since ` +
+                `"${baseBranch}" was cut - rebase this hotfix onto the release branch matching ${latestTag}.`
+              );
+            }
+
+  # DB migrations are out of scope for the automated hotfix flow. A hotfix
+  # needing a schema change goes through the Supabase SQL editor directly
+  # on prod, with a follow-up idempotent migration PR to main.
+  migration-boundary-check:
+    name: Block hotfix PRs touching supabase/migrations/
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Check for changes under supabase/migrations/
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Three dots (merge-base diff), not two - a two-dot diff would also
+          # flag migrations added to the base branch by someone else's PR
+          # after this one forked, even though this PR never touched them.
+          MIGRATION_FILES="$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}" -- supabase/migrations/)"
+
+          if [ -n "$MIGRATION_FILES" ]; then
+            echo "::error::This hotfix touches supabase/migrations/, which the automated hotfix flow does not support:"
+            echo "$MIGRATION_FILES"
+            echo ""
+            echo "Schema changes needed in production must go through the Supabase SQL editor directly, with a follow-up idempotent migration PR to main for other environments."
+            exit 1
+          fi
+
+          echo "No changes under supabase/migrations/ - OK"
