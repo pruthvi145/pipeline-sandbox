@@ -1,0 +1,337 @@
+name: "Release: Application Code Rollback"
+
+# Pipeline: resolve target + migration gate -> look up its Vercel build ->
+# instant rollback -> mark-stable. Never runs alongside a promote or another
+# rollback (shares the deploy-production concurrency group with
+# promote-to-production.yaml).
+#
+# Deliberately does not rebuild: this workflow only re-activates a build that
+# already exists on Vercel. If that build has been pruned, it fails with a
+# clear message rather than spending several minutes rebuilding something
+# rollback should rarely need in the first place - the team's convention is
+# to fix forward, not maintain a rebuild path for a rare emergency action.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Exact release tag to roll back to (e.g. v1.7.4). Leave blank to auto-resolve to the release before the current live one."
+        required: false
+        default: ""
+        type: string
+      confirm_db_change:
+        description: "Tick this only if you've confirmed the target release crosses a database change and the old code is still compatible (additive-only - never removed or altered anything). Required whenever a database change is detected between the target and what's live now; otherwise the workflow stops and tells you."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      target_tag: ${{ steps.gate-check.outputs.target_tag }}
+      resolved_via: ${{ steps.gate-check.outputs.resolved_via }}
+      live_tag: ${{ steps.live.outputs.live_tag }}
+    permissions:
+      contents: read
+    steps:
+      # Required for the local composite action below (`uses: ./...`) to be
+      # resolvable at all - GitHub Actions doesn't check out the repo on its
+      # own, and a local action reference needs its files present on disk.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Find current live release + all stable releases
+        id: live
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { data: latest } = await github.rest.repos.getLatestRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            const all = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            // listReleases is already newest → oldest by published_at, which
+            // resolveRollbackTarget's auto-resolve relies on.
+            const stable = all
+              .filter((r) => !r.draft && !r.prerelease)
+              .map((r) => ({ tag: r.tag_name, publishedAt: r.published_at }));
+
+            core.setOutput('live_tag', latest.tag_name);
+            core.setOutput('releases', JSON.stringify(stable));
+            core.info(`Live release: ${latest.tag_name} (${stable.length} stable releases total)`);
+
+      - name: Resolve rollback target tag
+        id: resolve-tag
+        uses: ./.github/actions/resolve-rollback-target
+        with:
+          requested-tag: ${{ inputs.tag }}
+          live-tag: ${{ steps.live.outputs.live_tag }}
+          releases: ${{ steps.live.outputs.releases }}
+          changed-files: "[]"
+
+      # Migrations "crossed" by the rollback are the ones present between the
+      # target and the live release - i.e. migrations that already ran against
+      # production (as part of shipping live) but the target's code predates.
+      #
+      # The boundary check (migrationFiles.length > 0) is inlined here rather
+      # than calling resolve-rollback-target a second time - the composite
+      # action's tag resolution is deterministic given the same inputs, so a
+      # second call would just repeat the resolve-tag step's work for no new
+      # information.
+      - name: Diff supabase/migrations between target and live
+        id: diff
+        uses: actions/github-script@v9
+        env:
+          TARGET_TAG: ${{ steps.resolve-tag.outputs.tag }}
+          LIVE_TAG: ${{ steps.live.outputs.live_tag }}
+        with:
+          script: |
+            // tags/ prefix forces tag resolution - without it, a branch
+            // sharing a tag's name would win, comparing the wrong commits.
+            const { data: compare } = await github.rest.repos.compareCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              base: `tags/${process.env.TARGET_TAG}`,
+              head: `tags/${process.env.LIVE_TAG}`,
+            });
+            const files = compare.files || [];
+
+            // GitHub's compare API caps `files` at 300 entries with no
+            // truncation flag - hitting exactly 300 means there may be more
+            // we never saw. Fail closed rather than risk missing a migration
+            // outside that window and reporting a false "no boundary".
+            if (files.length === 300) {
+              core.setFailed(
+                'The diff between the rollback target and the live release touched 300+ files - ' +
+                "GitHub's compare API caps the file list there, so migrations beyond that point " +
+                'may be missing from this check. Pick a closer rollback target, or verify ' +
+                'supabase/migrations/ manually between these two tags before proceeding.'
+              );
+              return;
+            }
+
+            const migrationFiles = files
+              .map((f) => f.filename)
+              .filter((f) => f.startsWith('supabase/migrations/'));
+
+            core.setOutput('changed_files', JSON.stringify(migrationFiles));
+            core.setOutput('migrated_files_count', String(migrationFiles.length));
+            core.setOutput('migration_boundary', String(migrationFiles.length > 0));
+
+      - name: Print rollback summary + enforce migration gate
+        id: gate-check
+        uses: actions/github-script@v9
+        env:
+          TARGET_TAG: ${{ steps.resolve-tag.outputs.tag }}
+          RESOLVED_VIA: ${{ steps.resolve-tag.outputs.resolved-via }}
+          LIVE_TAG: ${{ steps.live.outputs.live_tag }}
+          MIGRATION_BOUNDARY: ${{ steps.diff.outputs.migration_boundary }}
+          MIGRATED_FILES_COUNT: ${{ steps.diff.outputs.migrated_files_count }}
+          CONFIRM_DB_CHANGE: ${{ inputs.confirm_db_change }}
+        with:
+          script: |
+            const targetTag = process.env.TARGET_TAG;
+            const resolvedVia = process.env.RESOLVED_VIA;
+            const liveTag = process.env.LIVE_TAG;
+            const boundary = process.env.MIGRATION_BOUNDARY === 'true';
+            const migratedCount = process.env.MIGRATED_FILES_COUNT;
+            const confirmed = process.env.CONFIRM_DB_CHANGE === 'true';
+
+            const resolvedViaLine = resolvedVia === 'auto'
+              ? 'auto (tag input was blank)'
+              : 'manual (explicit tag input)';
+            const migrationsLine = boundary ? `${migratedCount} - confirmation required` : '0';
+
+            await core.summary
+              .addRaw('```', true)
+              .addRaw(`Rollback target:      ${targetTag}`, true)
+              .addRaw(`Resolved via:         ${resolvedViaLine}`, true)
+              .addRaw(`Currently live:       ${liveTag}`, true)
+              .addRaw(`Migrations crossed:   ${migrationsLine}`, true)
+              .addRaw('```', true)
+              .write();
+
+            core.setOutput('target_tag', targetTag);
+            core.setOutput('resolved_via', resolvedVia);
+
+            if (!boundary) {
+              core.info(`No database change between ${targetTag} and ${liveTag} - proceeding.`);
+              return;
+            }
+
+            if (confirmed) {
+              core.warning(
+                `Database change confirmed rolling back to ${targetTag} - proceeding. This deploys ` +
+                `old code against the current schema; no database action is taken.`
+              );
+              return;
+            }
+
+            core.setFailed(
+              `${targetTag} contains a database change (${migratedCount} migration file(s)) that ` +
+              `${liveTag} does not. Re-run with "confirm_db_change" ticked once you've confirmed the ` +
+              `old code is compatible - only safe when that change purely added something new.`
+            );
+
+  find-deployment:
+    needs: resolve
+    # A job's own `if:` replaces GitHub's default "needs succeeded" check,
+    # not adds to it - without needs.resolve.result here, a deliberately
+    # failed gate (core.setFailed on an unconfirmed database change) would
+    # not stop this job or the deploy job after it from running.
+    if: needs.resolve.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      deployment_id: ${{ steps.find.outputs.deployment_id }}
+    permissions:
+      contents: read
+    steps:
+      - name: Resolve target tag's commit SHA
+        id: sha
+        uses: actions/github-script@v9
+        env:
+          TARGET_TAG: ${{ needs.resolve.outputs.target_tag }}
+        with:
+          script: |
+            const { data } = await github.rest.repos.getCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: process.env.TARGET_TAG,
+            });
+            core.setOutput('sha', data.sha);
+
+      # No rebuild fallback: if this comes up empty, the workflow fails here
+      # with a clear message instead of spending several minutes rebuilding
+      # something rollback should rarely need - the team fixes forward.
+      - name: Look up an existing Vercel production deployment for that commit
+        id: find
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          COMMIT_SHA: ${{ steps.sha.outputs.sha }}
+          TARGET_TAG: ${{ needs.resolve.outputs.target_tag }}
+        run: |
+          set -euo pipefail
+          # Vercel's Instant Rollback re-aliases production to an already-built
+          # deployment without a rebuild - it's the fast, safe path since it
+          # can't produce a build that differs from what already ran on
+          # production. It only works when that exact deployment still exists
+          # (Vercel prunes old ones over time), so we look it up by the git
+          # commit the target tag points at via its `meta.githubCommitSha`
+          # (set on every deploy by deploy-to-vercel's VERCEL_GIT_COMMIT_SHA
+          # env var) and fail below when it's gone - no rebuild fallback.
+          # teamId wants an opaque team ID; total-family is the team's slug
+          # (visible in vercel.com/total-family/... URLs), so it belongs in
+          # the slug param instead.
+          RESPONSE=$(curl -sf --connect-timeout 5 --max-time 15 \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v6/deployments?projectId=${{ vars.VERCEL_PROJECT }}&target=production&state=READY&slug=${{ vars.VERCEL_SCOPE }}&meta-githubCommitSha=${COMMIT_SHA}&limit=1")
+          DEPLOYMENT_ID=$(echo "$RESPONSE" | jq -r '.deployments[0].uid // empty')
+          if [ -z "$DEPLOYMENT_ID" ]; then
+            echo "::error::No existing Vercel deployment found for ${TARGET_TAG} (commit ${COMMIT_SHA}) - it may have been pruned. Cannot roll back to it."
+            exit 1
+          fi
+          echo "deployment_id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
+          echo "Found existing Vercel deployment $DEPLOYMENT_ID for commit ${COMMIT_SHA}"
+
+  # No checkout/build here on purpose: `vercel rollback` re-activates a build
+  # that already exists, it never touches the app's source code or
+  # node_modules, so there is nothing here for a checkout or npm ci to do.
+  deploy-instant-rollback:
+    needs: [resolve, find-deployment]
+    if: needs.resolve.result == 'success' && needs.find-deployment.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Vercel Instant Rollback (re-alias production, no rebuild)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          DEPLOYMENT_ID: ${{ needs.find-deployment.outputs.deployment_id }}
+        run: |
+          set +e
+          OUTPUT=$(npx vercel rollback "$DEPLOYMENT_ID" --scope=${{ vars.VERCEL_SCOPE }} --token="$VERCEL_TOKEN" --yes 2>&1)
+          STATUS=$?
+          echo "$OUTPUT"
+          if [ $STATUS -ne 0 ]; then
+            # Vercel rejects "rolling back" to whatever's already live (422).
+            # A retry after mark-stable failed/didn't run - so GitHub's "latest"
+            # never flipped even though this deploy already went out - re-resolves
+            # the same target and lands here. Nothing left to deploy; treat it as
+            # done so mark-stable can still catch GitHub up.
+            if echo "$OUTPUT" | grep -q "is the current production deployment"; then
+              echo "::notice::${DEPLOYMENT_ID} is already the live production deployment - nothing to roll back, continuing."
+              exit 0
+            fi
+            exit $STATUS
+          fi
+
+      - name: Rollback Summary
+        env:
+          TARGET_TAG: ${{ needs.resolve.outputs.target_tag }}
+          DEPLOYMENT_ID: ${{ needs.find-deployment.outputs.deployment_id }}
+        run: |
+          {
+            echo "## ⏪ Instant Rollback Complete"
+            echo ""
+            echo "**Target:** $TARGET_TAG"
+            echo "**Deployment:** $DEPLOYMENT_ID"
+            echo "**Alias:** ${{ vars.PROD_ALIAS }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  mark-stable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [resolve, deploy-instant-rollback]
+    if: needs.deploy-instant-rollback.result == 'success'
+    permissions:
+      # Read-only: the release update below runs on the GitHub App token from
+      # create-github-app-token, not this job's own GITHUB_TOKEN.
+      contents: read
+    steps:
+      # client-id (not app-id) is correct here - app-id is the deprecated
+      # input per the action's own action.yml. Some linters/reviewers bundle
+      # an outdated schema and flag this as invalid; it isn't.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Mark rollback target as the latest stable release
+        uses: actions/github-script@v9
+        env:
+          TARGET_TAG: ${{ needs.resolve.outputs.target_tag }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const tag = process.env.TARGET_TAG;
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag,
+            });
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              prerelease: false,
+              make_latest: 'true',
+            });
+            core.info(`${tag} is now the latest stable release`);

@@ -1,5 +1,5 @@
 name: Migrate Supabase Database
-description: Run Supabase migrations against any environment (testing/production)
+description: Run Supabase migrations against any environment (dev/test/prod)
 
 inputs:
   project-id:
@@ -12,62 +12,66 @@ inputs:
     description: "Supabase database password"
     required: true
   baseline-cidrs:
-    description: "Space-separated CIDRs the allow-list is restored to after migrating (only used if vars.MANAGE_NETWORK_WINDOW is true)"
-    required: false
-    default: ""
-  take-snapshot:
-    description: 'Dump public/supabase_migrations and upload to R2 before migrating ("true"/"false")'
-    required: false
-    default: "false"
-  release-tag:
-    description: "Release tag used to name the snapshot object in R2 (e.g. v1.0.0). Required when take-snapshot is true."
-    required: false
-    default: ""
-  r2-account-id:
-    required: false
-    default: ""
-  r2-backup-bucket:
-    required: false
-    default: ""
-  r2-backup-access-key-id:
-    required: false
-    default: ""
-  r2-backup-secret-access-key:
-    required: false
-    default: ""
+    description: "Space-separated CIDRs the allow-list is restored to after migrating"
+    required: true
 
+# No setup-cli step: callers run `npm ci` first, so `npx supabase` resolves the
+# devDependency in package.json. A separately pinned binary was silently ignored
+# by npx, meaning the pin never described the version that actually ran.
 runs:
   using: "composite"
   steps:
-    - uses: ./.github/actions/open-db-network-window
-      with:
-        project-id: ${{ inputs.project-id }}
-        access-token: ${{ inputs.access-token }}
-        baseline-cidrs: ${{ inputs.baseline-cidrs }}
+    # Opens before `link`, not just before `db push`, because `link` also opens
+    # a Postgres connection. Supabase reads an empty allow-list as "restrictions
+    # off", so an unset baseline would silently disable the control instead of
+    # failing - hence the guard.
+    - name: Open migration window
+      shell: bash
+      env:
+        SUPABASE_ACCESS_TOKEN: ${{ inputs.access-token }}
+        BASELINE_CIDRS: ${{ inputs.baseline-cidrs }}
+        PROJECT_ID: ${{ inputs.project-id }}
+      run: |
+        set -euo pipefail
+        if [ -z "${BASELINE_CIDRS// /}" ]; then
+          echo "::error::baseline-cidrs is empty - refusing to run, this would disable network restrictions"
+          exit 1
+        fi
+        RUNNER_IP="$(curl -fsS --retry 3 --max-time 10 https://api.ipify.org)"
+        FLAGS=()
+        for cidr in $BASELINE_CIDRS; do FLAGS+=(--db-allow-cidr "$cidr"); done
+        echo "🔓 Adding runner to the allow-list for ${PROJECT_ID}..."
+        npx supabase network-restrictions update --project-ref "$PROJECT_ID" \
+          "${FLAGS[@]}" --db-allow-cidr "${RUNNER_IP}/32" --experimental
+
+        # Read status from the Management API rather than the CLI's printed text:
+        # `get` ignores --output json, so matching its wording would break silently
+        # on a CLI upgrade, and the version floats with package.json.
+        for _ in $(seq 1 20); do
+          STATUS="$(curl -sS --max-time 10 \
+            -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+            "https://api.supabase.com/v1/projects/${PROJECT_ID}/network-restrictions" \
+            | jq -r '.status // empty')"
+          if [ "$STATUS" = "applied" ]; then
+            echo "✅ Window open"
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "::error::Network restrictions did not reach applied state in 100s (last status: ${STATUS:-unknown})"
+        echo "::error::If the next step fails with EADDRNOTALLOWED, the address Supabase sees differs from ${RUNNER_IP} reported by api.ipify.org. The error names the address it saw - allow that instead."
+        exit 1
 
     - name: Link to Supabase project
       shell: bash
       env:
         SUPABASE_ACCESS_TOKEN: ${{ inputs.access-token }}
         SUPABASE_DB_PASSWORD: ${{ inputs.db-password }}
+        BASELINE_CIDRS: ${{ inputs.baseline-cidrs }}
         PROJECT_ID: ${{ inputs.project-id }}
       run: |
         echo "🔗 Linking to Supabase project ${PROJECT_ID}..."
         npx supabase link --project-ref "$PROJECT_ID"
-
-    - name: Snapshot database before migration
-      if: inputs.take-snapshot == 'true'
-      shell: bash
-      env:
-        SUPABASE_ACCESS_TOKEN: ${{ inputs.access-token }}
-        SUPABASE_DB_PASSWORD: ${{ inputs.db-password }}
-        PROJECT_ID: ${{ inputs.project-id }}
-        RELEASE_TAG: ${{ inputs.release-tag }}
-        R2_ACCOUNT_ID: ${{ inputs.r2-account-id }}
-        R2_DB_BACKUP_BUCKET: ${{ inputs.r2-backup-bucket }}
-        R2_DB_BACKUP_ACCESS_KEY_ID: ${{ inputs.r2-backup-access-key-id }}
-        R2_DB_BACKUP_SECRET_ACCESS_KEY: ${{ inputs.r2-backup-secret-access-key }}
-      run: node "${GITHUB_WORKSPACE}/.github/scripts/db-snapshot-upload.mjs"
 
     - name: Run database migrations
       shell: bash
@@ -76,7 +80,6 @@ runs:
         SUPABASE_DB_PASSWORD: ${{ inputs.db-password }}
         BASELINE_CIDRS: ${{ inputs.baseline-cidrs }}
         PROJECT_ID: ${{ inputs.project-id }}
-        MANAGE_NETWORK_WINDOW: ${{ vars.MANAGE_NETWORK_WINDOW }}
       run: |
         set -uo pipefail
         echo "🚀 Running database migrations..."
@@ -87,10 +90,14 @@ runs:
         fi
         echo "$OUT"
 
-        if [ "${MANAGE_NETWORK_WINDOW:-}" != "true" ] || [ -z "${BASELINE_CIDRS// /}" ]; then
-          exit 1
-        fi
-
+        # The window was opened for whatever api.ipify.org reported, but the
+        # database admits on the address it actually sees, and those can differ
+        # behind a proxy or NAT. The refusal names the address Supabase saw, so
+        # reopen for that one and retry rather than failing the deploy.
+        #
+        # This guard lives here, not on `link`: as of CLI 2.113.0 `link` only
+        # writes the project ref and never opens a Postgres connection, so a
+        # blocked address first surfaces on push.
         SEEN="$(sed -n 's/.*allow_list: {\([0-9, ]*\)}.*/\1/p' <<<"$OUT" | head -1 | tr -d ' ' | tr ',' '.')"
         if [ -z "$SEEN" ]; then
           exit 1
@@ -114,9 +121,23 @@ runs:
         npx supabase db push
         echo "✅ Database migrations completed successfully"
 
-    - if: always()
-      uses: ./.github/actions/close-db-network-window
-      with:
-        project-id: ${{ inputs.project-id }}
-        access-token: ${{ inputs.access-token }}
-        baseline-cidrs: ${{ inputs.baseline-cidrs }}
+    # always(): a window left open would allow a recycled GitHub runner address
+    # until the next deploy or the drift check.
+    - name: Close migration window
+      if: always()
+      shell: bash
+      env:
+        SUPABASE_ACCESS_TOKEN: ${{ inputs.access-token }}
+        BASELINE_CIDRS: ${{ inputs.baseline-cidrs }}
+        PROJECT_ID: ${{ inputs.project-id }}
+      run: |
+        set -euo pipefail
+        if [ -z "${BASELINE_CIDRS// /}" ]; then
+          echo "::error::baseline-cidrs is empty - cannot restore allow-list"
+          exit 1
+        fi
+        FLAGS=()
+        for cidr in $BASELINE_CIDRS; do FLAGS+=(--db-allow-cidr "$cidr"); done
+        echo "🔒 Restoring allow-list to: ${BASELINE_CIDRS}"
+        npx supabase network-restrictions update --project-ref "$PROJECT_ID" \
+          "${FLAGS[@]}" --experimental
