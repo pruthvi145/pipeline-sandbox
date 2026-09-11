@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.4.0...v0.5.0) (2026-09-11)
+
+
+### Features
+
+* add hotfix pipeline (release/vX.Y.Z branches) ([#9](https://github.com/pruthvi145/pipeline-sandbox/issues/9)) ([018b1f1](https://github.com/pruthvi145/pipeline-sandbox/commit/018b1f1a8e3b90a53b82967ce9d0f160ce6c2f32))
+* show environment/version/commit badge on every page ([#11](https://github.com/pruthvi145/pipeline-sandbox/issues/11)) ([6b93f3a](https://github.com/pruthvi145/pipeline-sandbox/commit/6b93f3ab128c84b967b084509fc522eefd76b547))
+
 ## [0.4.0](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.3.0...v0.4.0) (2026-09-10)
 
 
