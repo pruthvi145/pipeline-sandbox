@@ -12,6 +12,11 @@ on:
         required: false
         default: false
         type: boolean
+      force_downgrade:
+        description: "Allow promoting a tag older than what's currently live in production. Only use if you really mean to roll back."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -26,6 +31,7 @@ jobs:
     outputs:
       release_id: ${{ steps.find.outputs.release_id }}
       already_stable: ${{ steps.find.outputs.already_stable }}
+      is_newer_than_latest: ${{ steps.find.outputs.is_newer_than_latest }}
     steps:
       - name: Validate tag format and release state
         id: find
@@ -33,10 +39,12 @@ jobs:
         env:
           INPUT_TAG: ${{ inputs.tag }}
           INPUT_REDEPLOY: ${{ inputs.redeploy }}
+          INPUT_FORCE_DOWNGRADE: ${{ inputs.force_downgrade }}
         with:
           script: |
             const tag = process.env.INPUT_TAG;
             const redeploy = process.env.INPUT_REDEPLOY === 'true';
+            const forceDowngrade = process.env.INPUT_FORCE_DOWNGRADE === 'true';
 
             if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
               core.setFailed(`Tag "${tag}" does not match strict v-prefixed semver (e.g. v1.0.0). Refusing to promote.`);
@@ -78,6 +86,51 @@ jobs:
               core.warning(`${tag} is already stable - re-deploying it to production without changing release state.`);
             }
 
+            // Guard against silently deploying an older version over a
+            // newer one that's already live - this becomes a real risk once
+            // hotfixes on older release/vX.Y.Z lines are common. "Currently
+            // live" is approximated as whatever GitHub currently calls the
+            // latest (non-draft, non-prerelease) release.
+            const parseSemver = (t) => {
+              const m = t.match(/^v(\d+)\.(\d+)\.(\d+)$/);
+              return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+            };
+            const compareSemver = (a, b) => {
+              for (let i = 0; i < 3; i++) {
+                if (a[i] !== b[i]) return a[i] - b[i];
+              }
+              return 0;
+            };
+
+            let isNewerThanLatest = true;
+            let currentLatestTag = null;
+            try {
+              const { data: latest } = await github.rest.repos.getLatestRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+              });
+              currentLatestTag = latest.tag_name;
+            } catch (err) {
+              if (err.status !== 404) throw err;
+            }
+
+            if (currentLatestTag && currentLatestTag !== tag) {
+              const current = parseSemver(currentLatestTag);
+              const incoming = parseSemver(tag);
+              if (current && incoming) {
+                const cmp = compareSemver(incoming, current);
+                isNewerThanLatest = cmp > 0;
+                if (cmp < 0 && !forceDowngrade) {
+                  core.setFailed(
+                    `Refusing to promote ${tag}: production is currently on ${currentLatestTag}, which is newer. ` +
+                    `Promoting ${tag} now would downgrade production. Re-run with "force_downgrade" enabled if this is intentional.`
+                  );
+                  return;
+                }
+              }
+            }
+            core.setOutput('is_newer_than_latest', String(isNewerThanLatest));
+
   deploy-to-prod:
     needs: validate-release
     uses: ./.github/workflows/_deploy.yaml
@@ -114,13 +167,75 @@ jobs:
         env:
           RELEASE_ID: ${{ needs.validate-release.outputs.release_id }}
           INPUT_TAG: ${{ inputs.tag }}
+          IS_NEWER_THAN_LATEST: ${{ needs.validate-release.outputs.is_newer_than_latest }}
         with:
           script: |
+            const isNewer = process.env.IS_NEWER_THAN_LATEST === 'true';
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: parseInt(process.env.RELEASE_ID, 10),
               prerelease: false,
-              make_latest: 'true',
+              // Only steal the "latest" label if this tag is actually newer -
+              // otherwise an older-line hotfix promoted after a newer normal
+              // release would incorrectly become "latest" on GitHub.
+              make_latest: isNewer ? 'true' : 'false',
             });
-            core.info(`${process.env.INPUT_TAG} is now the latest stable release`);
+            if (isNewer) {
+              core.info(`${process.env.INPUT_TAG} is now the latest stable release`);
+            } else {
+              core.info(`${process.env.INPUT_TAG} promoted to stable, but is not newer than the current latest release - "latest" label left unchanged`);
+            }
+
+  # Every production release now gets a permanent branch, frozen at the
+  # commit that shipped. Hotfixes branch off the current one instead of
+  # main (which can be ahead with unreleased work). Runs for every
+  # successful deploy - normal releases and hotfixes alike - so each
+  # promoted version always has somewhere for its own future hotfixes to
+  # branch from.
+  create-release-branch:
+    needs: [validate-release, deploy-to-prod]
+    if: needs.deploy-to-prod.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create permanent release/vX.Y.Z branch
+        uses: actions/github-script@v9
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        with:
+          script: |
+            const tag = process.env.INPUT_TAG;
+            const branchName = `release/${tag}`;
+
+            const { data: tagRef } = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `tags/${tag}`,
+            });
+            let commitSha = tagRef.object.sha;
+            if (tagRef.object.type === 'tag') {
+              const { data: tagObj } = await github.rest.git.getTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_sha: tagRef.object.sha,
+              });
+              commitSha = tagObj.object.sha;
+            }
+
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/heads/${branchName}`,
+                sha: commitSha,
+              });
+              core.info(`Created permanent branch ${branchName} at ${commitSha.substring(0, 7)}`);
+            } catch (err) {
+              // 422 = branch already exists. This branch is permanent and
+              // is never force-reset or reused - a re-dispatch/redeploy of
+              // the same tag must not touch it.
+              if (err.status !== 422) throw err;
+              core.info(`Branch ${branchName} already exists - leaving it untouched (never force-reset)`);
+            }
