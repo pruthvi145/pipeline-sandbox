@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.5.0...v0.5.1) (2026-09-11)
+
+
+### Maintenance
+
+* backport hotfix v0.5.1 to main ([#17](https://github.com/pruthvi145/pipeline-sandbox/issues/17)) ([6590b6c](https://github.com/pruthvi145/pipeline-sandbox/commit/6590b6c83aa8013247cec93066359298a84cdbdf))
+
 ## [0.5.0](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.4.0...v0.5.0) (2026-09-11)
 
 
