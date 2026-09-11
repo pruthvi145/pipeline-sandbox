@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.5.0...v0.5.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* second trivial hotfix test change ([#16](https://github.com/pruthvi145/pipeline-sandbox/issues/16)) ([4dedd0f](https://github.com/pruthvi145/pipeline-sandbox/commit/4dedd0fd6c9126a205e7eab6e1a99b8795e3f15a))
+* trivial hotfix test change ([#12](https://github.com/pruthvi145/pipeline-sandbox/issues/12)) ([2b035cf](https://github.com/pruthvi145/pipeline-sandbox/commit/2b035cfc16bb2c7a992e8d9544a2801b93eb41f9))
+
 ## [0.5.0](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.4.0...v0.5.0) (2026-09-11)
 
 
