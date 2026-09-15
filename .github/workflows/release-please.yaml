@@ -204,6 +204,7 @@ jobs:
   # promotion as-is.
   cleanup-on-failure:
     if: |
+      always() &&
       github.ref_name != 'main' &&
       needs.release-please.outputs.release_created == 'true' &&
       (needs.deploy-to-demo.result == 'failure' || needs.smoke-check.result == 'failure')
