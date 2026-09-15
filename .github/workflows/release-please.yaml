@@ -120,15 +120,6 @@ jobs:
           target-branch: ${{ github.ref_name != 'main' && github.ref_name || '' }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # TEMPORARY DEBUG - remove once release_created mystery is solved.
-      - name: DEBUG dump release-please outputs
-        run: |
-          echo "release_created='${{ steps.release.outputs.release_created }}'"
-          echo "tag_name='${{ steps.release.outputs.tag_name }}'"
-          echo "event_name=${{ github.event_name }}"
-          echo "ref=${{ github.ref }}"
-          echo "sha=${{ github.sha }}"
-
   # Flip to prerelease BEFORE deploy so a failed deploy never leaves the
   # release as the latest stable. Shared by main and hotfix releases alike.
   mark-prerelease:
