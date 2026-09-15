@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.4](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.3...v0.6.4) (2026-09-15)
+
+
+### Bug Fixes
+
+* break health check on purpose ([cec5dca](https://github.com/pruthvi145/pipeline-sandbox/commit/cec5dcac36f840d0253e70af15510a0e30dc4d66))
+* **ci:** cleanup-on-failure never actually ran despite matching its own condition ([eca7fef](https://github.com/pruthvi145/pipeline-sandbox/commit/eca7fef9d59800c78e3ff878b77aec99adecfe98))
+* **ci:** drop x-vercel-set-bypass-cookie - it causes an infinite redirect loop under curl ([36d92f2](https://github.com/pruthvi145/pipeline-sandbox/commit/36d92f28d7c55d5f4a41bf7ac1bbf93a10f0b54b))
+* **ci:** smoke-check never actually reached the app - Vercel SSO wall swallowed it ([e4a8190](https://github.com/pruthvi145/pipeline-sandbox/commit/e4a81906dede1bf721d8eca53ecf7336e50212ed))
+
 ## [0.6.3](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.2...v0.6.3) (2026-09-15)
 
 
