@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.5](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.4...v0.6.5) (2026-09-15)
+
+
+### Bug Fixes
+
+* break health check on purpose ([#36](https://github.com/pruthvi145/pipeline-sandbox/issues/36)) ([7166cb0](https://github.com/pruthvi145/pipeline-sandbox/commit/7166cb03297e9d12d21f74ac50be83b22130bb21))
+
 ## [0.6.4](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.3...v0.6.4) (2026-09-15)
 
 
