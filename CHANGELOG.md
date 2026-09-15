@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.4](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.3...v0.6.4) (2026-09-15)
+
+
+### Bug Fixes
+
+* test hotfix pipeline ([#22](https://github.com/pruthvi145/pipeline-sandbox/issues/22)) ([8b5da6a](https://github.com/pruthvi145/pipeline-sandbox/commit/8b5da6aba9e67ccdebb2e5daa7a74a854d793849))
+
 ## [0.6.3](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.2...v0.6.3) (2026-09-15)
 
 
