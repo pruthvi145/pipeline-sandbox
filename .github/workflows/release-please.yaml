@@ -166,6 +166,101 @@ jobs:
           echo "Checking ${DEPLOY_URL}/api/health"
           curl -fsS "${DEPLOY_URL}/api/health"
 
+  # A failed demo deploy or smoke-check on a hotfix deletes the tag+release
+  # it just cut and reverts the manifest, so the retry proposes the SAME
+  # patch version again instead of skipping ahead - clean version history,
+  # no gaps. Main has no equivalent retry path - a failed RC just blocks
+  # promotion as-is.
+  cleanup-on-failure:
+    if: |
+      github.ref_name != 'main' &&
+      needs.release-please.outputs.release_created == 'true' &&
+      (needs.deploy-to-demo.result == 'failure' || needs.smoke-check.result == 'failure')
+    needs: [release-please, deploy-to-demo, smoke-check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete failed tag + release, revert the manifest
+        uses: actions/github-script@v9
+        env:
+          FAILED_TAG: ${{ needs.release-please.outputs.tag_name }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { parseVersionTag } = require('./scripts/ci/check-release-downgrade.js');
+            const { revertManifestVersion, tagToManifestVersion } = require('./scripts/ci/revert-hotfix-manifest.js');
+
+            const failedTag = process.env.FAILED_TAG;
+            const failedVersion = tagToManifestVersion(failedTag);
+
+            const parts = parseVersionTag(failedTag);
+            if (!parts) {
+              core.setFailed(`Cannot compute the previous version - "${failedTag}" is not a valid vX.Y.Z tag`);
+              return;
+            }
+            const [major, minor, patch] = parts;
+            const previousVersion = `${major}.${minor}.${Math.max(patch - 1, 0)}`;
+
+            try {
+              const { data: release } = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: failedTag,
+              });
+              await github.rest.repos.deleteRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.id,
+              });
+              core.info(`Deleted release ${failedTag}`);
+            } catch (err) {
+              if (err.status !== 404) throw err;
+              core.info(`No release found for ${failedTag} - already gone`);
+            }
+
+            try {
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${failedTag}`,
+              });
+              core.info(`Deleted tag ${failedTag}`);
+            } catch (err) {
+              if (err.status !== 404 && err.status !== 422) throw err;
+              core.info(`No tag ref found for ${failedTag} - already gone`);
+            }
+
+            const manifestPath = '.release-please-manifest.json';
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            const { manifest: revertedManifest, reverted } = revertManifestVersion(manifest, {
+              failedVersion,
+              previousVersion,
+            });
+
+            if (!reverted) {
+              core.warning(
+                `.release-please-manifest.json no longer holds "${failedVersion}" - leaving it untouched ` +
+                `(something else already changed it)`
+              );
+              return;
+            }
+
+            fs.writeFileSync(manifestPath, JSON.stringify(revertedManifest, null, 2) + '\n');
+
+            await exec.exec('git', ['config', 'user.name', 'github-actions[bot]']);
+            await exec.exec('git', ['config', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
+            await exec.exec('git', ['add', manifestPath]);
+            await exec.exec('git', ['commit', '-m', `chore: revert manifest after failed hotfix ${failedTag}`]);
+            await exec.exec('git', ['push', 'origin', `HEAD:${process.env.RELEASE_BRANCH}`]);
+
+            core.info(`Reverted manifest ${failedVersion} -> ${previousVersion} on ${process.env.RELEASE_BRANCH}`);
+
   backport-to-main:
     name: Open backport PR to main
     if: |
