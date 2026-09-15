@@ -3,6 +3,7 @@
   "version": "0.5.0",
   "private": true,
   "scripts": {
+    "hotfix:start": "node scripts/hotfix-start.js",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
