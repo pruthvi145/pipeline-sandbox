@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.1...v0.6.2) (2026-09-15)
+
+
+### Bug Fixes
+
+* trigger a release for debug output capture ([1a7ae96](https://github.com/pruthvi145/pipeline-sandbox/commit/1a7ae961d772d370fc7cb5f3ce43383dab441bc9))
+
 ## [0.6.1](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.0...v0.6.1) (2026-09-15)
 
 
