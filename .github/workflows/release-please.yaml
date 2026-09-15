@@ -96,7 +96,15 @@ jobs:
         with:
           config-file: ${{ github.ref_name == 'main' && 'release-please-config.json' || 'release-please-config.hotfix.json' }}
           manifest-file: .release-please-manifest.json
-          target-branch: ${{ github.ref_name }}
+          # Omit target-branch for main entirely, don't just pass "main" -
+          # explicitly passing it (even as the same value the default would
+          # resolve to) broke squash-merge release-commit detection: the
+          # release PR merged and the tag got cut, but release_created came
+          # back false, so mark-prerelease/deploy-to-demo/notify never ran.
+          # Confirmed by comparing against this same repo's pre-merge
+          # release-please.yaml, which never passed target-branch and never
+          # had this problem.
+          target-branch: ${{ github.ref_name != 'main' && github.ref_name || '' }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # Flip to prerelease BEFORE deploy so a failed deploy never leaves the
