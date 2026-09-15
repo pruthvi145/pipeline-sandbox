@@ -190,11 +190,17 @@ jobs:
           # the bypass header, a broken /api/health and a healthy one look
           # identical here: both just redirect to vercel.com/sso-api with a
           # 302, and `curl -f` only fails on 4xx/5xx, so it "passes" either
-          # way. -L follows the redirect (a no-op once bypassed) and -f then
-          # correctly fails on whatever /api/health actually returns.
+          # way. -L follows the redirect and -f then correctly fails on
+          # whatever /api/health actually returns.
+          #
+          # Don't add x-vercel-set-bypass-cookie: true here - that tells
+          # Vercel to hand the bypass token back via a redirect + Set-Cookie
+          # for a BROWSER to store and reuse across page loads. curl has no
+          # cookie jar, so it just gets redirected back to the same URL
+          # forever, hits its 50-redirect cap, and fails with exit 47. The
+          # bypass header alone is sufficient for a single automated request.
           curl -fsSL \
             -H "x-vercel-protection-bypass: ${BYPASS_SECRET}" \
-            -H "x-vercel-set-bypass-cookie: true" \
             "${DEPLOY_URL}/api/health"
 
   # A failed demo deploy or smoke-check on a hotfix deletes the tag+release
