@@ -182,10 +182,20 @@ jobs:
       - name: Hit /api/health on the preview deployment
         env:
           DEPLOY_URL: ${{ needs.deploy-to-demo.outputs.deployment-url }}
+          BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -euo pipefail
           echo "Checking ${DEPLOY_URL}/api/health"
-          curl -fsS "${DEPLOY_URL}/api/health"
+          # Preview deployments sit behind Vercel's SSO wall - without -L and
+          # the bypass header, a broken /api/health and a healthy one look
+          # identical here: both just redirect to vercel.com/sso-api with a
+          # 302, and `curl -f` only fails on 4xx/5xx, so it "passes" either
+          # way. -L follows the redirect (a no-op once bypassed) and -f then
+          # correctly fails on whatever /api/health actually returns.
+          curl -fsSL \
+            -H "x-vercel-protection-bypass: ${BYPASS_SECRET}" \
+            -H "x-vercel-set-bypass-cookie: true" \
+            "${DEPLOY_URL}/api/health"
 
   # A failed demo deploy or smoke-check on a hotfix deletes the tag+release
   # it just cut and reverts the manifest, so the retry proposes the SAME
