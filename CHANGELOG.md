@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.5](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.4...v0.6.5) (2026-09-15)
+
+
+### Bug Fixes
+
+* break health check on purpose ([#25](https://github.com/pruthvi145/pipeline-sandbox/issues/25)) ([a513e0b](https://github.com/pruthvi145/pipeline-sandbox/commit/a513e0b80e14f8a174cac719b376ab257af63ddb))
+* **ci:** cleanup-on-failure never actually ran despite matching its own condition ([953ec07](https://github.com/pruthvi145/pipeline-sandbox/commit/953ec07eb875717f4b739fb12003a5d0099e9433))
+* **ci:** smoke-check never actually reached the app - Vercel SSO wall swallowed it ([216faca](https://github.com/pruthvi145/pipeline-sandbox/commit/216facae63046281f03953be08dfa8f5e24423db))
+
+
+### Maintenance
+
+* manually revert manifest past orphaned v0.6.5/v0.6.6 ([21379af](https://github.com/pruthvi145/pipeline-sandbox/commit/21379af99babfe08ef01c2458e708c544368c1ff))
+* **release/v0.6.3:** release 0.6.5 ([#26](https://github.com/pruthvi145/pipeline-sandbox/issues/26)) ([ab77f70](https://github.com/pruthvi145/pipeline-sandbox/commit/ab77f70e48fea9331a76de92851c55b21de54c27))
+* **release/v0.6.3:** release 0.6.6 ([#29](https://github.com/pruthvi145/pipeline-sandbox/issues/29)) ([579048d](https://github.com/pruthvi145/pipeline-sandbox/commit/579048dc6759ac238a972cebfdcb8645eceba70e))
+* **release/v0.6.3:** release 0.6.7 ([#30](https://github.com/pruthvi145/pipeline-sandbox/issues/30)) ([1ab54b4](https://github.com/pruthvi145/pipeline-sandbox/commit/1ab54b48acbb7d82dda048fbff8ccbd59698fb34))
+* revert manifest after failed hotfix v0.6.7 ([a95a349](https://github.com/pruthvi145/pipeline-sandbox/commit/a95a3493b588c30d36f46121096f5f945eb1cba4))
+
 ## [0.6.7](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.6...v0.6.7) (2026-09-15)
 
 
