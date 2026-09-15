@@ -33,19 +33,32 @@ jobs:
   # only the branch matching the current production release may cut a
   # hotfix release. main has no such concept.
   verify-current-release-branch:
-    if: github.ref_name != 'main'
+    # No `if:` gate here on purpose - a job with conclusion "skipped" breaks
+    # output propagation for anything downstream of its consumer, even
+    # through a consumer that uses always() to survive the skip itself
+    # (confirmed: release-please's own step output release_created='true',
+    # but mark-prerelease/deploy-to-demo/notify still read it as not 'true'
+    # and skipped, only when this job was conditionally skipped for main).
+    # Always running and short-circuiting instantly for main avoids the
+    # skip state entirely, which is what actually fixes it - not always().
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       is_current: ${{ steps.check.outputs.is_current }}
     steps:
       - uses: actions/checkout@v7
+        if: github.ref_name != 'main'
 
       - name: Confirm this is the current production release branch
         id: check
         uses: actions/github-script@v9
         with:
           script: |
+            if (context.ref.replace('refs/heads/', '') === 'main') {
+              core.setOutput('is_current', 'true');
+              return;
+            }
+
             const { expectedReleaseBranch, isCurrentReleaseBranch } = require('./scripts/ci/resolve-release-branch.js');
 
             const branch = context.ref.replace('refs/heads/', '');
