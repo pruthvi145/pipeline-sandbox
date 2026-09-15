@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.0...v0.6.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* don't pass target-branch=main explicitly to release-please-action ([d1603b2](https://github.com/pruthvi145/pipeline-sandbox/commit/d1603b20bfdd2d190bde1dc51018c6f01f8920eb))
+
 ## [0.6.0](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.5.0...v0.6.0) (2026-09-15)
 
 
