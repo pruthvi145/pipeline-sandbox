@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.6.0](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.5.0...v0.6.0) (2026-09-15)
+
+
+### Features
+
+* add Discord notifications for demo/hotfix/production deploys ([f8a0332](https://github.com/pruthvi145/pipeline-sandbox/commit/f8a0332531189cc44a2e3428764c98f09adfafc6))
+* add manual redeploy-to-demo workflow, matching production's redeploy ([c9aed9b](https://github.com/pruthvi145/pipeline-sandbox/commit/c9aed9bc33a3b6aad869dd85d3b96c9346eadbf6))
+* add npm run hotfix:start, remove CI-created release branches ([f542a1b](https://github.com/pruthvi145/pipeline-sandbox/commit/f542a1b44a16049f50318dbfff3403a2355f2067))
+* delete superseded release branch after production promote ([39d9678](https://github.com/pruthvi145/pipeline-sandbox/commit/39d96780d54ded092cf695d9796a730672018003))
+* **release-please:** merge hotfix workflow into release-please.yaml ([4162cc6](https://github.com/pruthvi145/pipeline-sandbox/commit/4162cc6e6ee8583bdb5757c4a1ce19720b4d1b04))
+* revert manifest and delete tag+release on failed hotfix ([f83dc6a](https://github.com/pruthvi145/pipeline-sandbox/commit/f83dc6a052437286cc532941de01b5bd2a2d6c04))
+* snapshot production DB to R2 before every production migration ([d1ad0b9](https://github.com/pruthvi145/pipeline-sandbox/commit/d1ad0b90db8000c0f9da52971ef1d3dae5745deb))
+
+
+### Refactoring
+
+* extract downgrade/branch/manifest logic into scripts/ci ([0150c86](https://github.com/pruthvi145/pipeline-sandbox/commit/0150c869ad43cb8e5d92ad5d543e3fdf9faad281))
+
+
+### Maintenance
+
+* backport hotfix v0.5.1 to main ([#17](https://github.com/pruthvi145/pipeline-sandbox/issues/17)) ([6590b6c](https://github.com/pruthvi145/pipeline-sandbox/commit/6590b6c83aa8013247cec93066359298a84cdbdf))
+
 ## [0.5.0](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.4.0...v0.5.0) (2026-09-11)
 
 
