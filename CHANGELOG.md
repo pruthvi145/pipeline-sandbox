@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.4](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.3...v0.6.4) (2026-09-15)
+
+
+### Bug Fixes
+
+* **ci:** cleanup-on-failure never actually ran despite matching its own condition ([05f9fc3](https://github.com/pruthvi145/pipeline-sandbox/commit/05f9fc308ad2c6a589bf0377ddaa34a84a410779))
+* **ci:** smoke-check never actually reached the app - Vercel SSO wall swallowed it ([1d8d5c5](https://github.com/pruthvi145/pipeline-sandbox/commit/1d8d5c5568689c0a2383fcbb8445841b69abf3c6))
+* test hotfix pipeline ([#40](https://github.com/pruthvi145/pipeline-sandbox/issues/40)) ([7da364b](https://github.com/pruthvi145/pipeline-sandbox/commit/7da364bed908c9eb6ba97b92895490e2b63aec9c))
+
 ## [0.6.3](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.2...v0.6.3) (2026-09-15)
 
 
