@@ -5,9 +5,9 @@ name: "Hotfix PR: Required Checks"
 # production release" is verified live here rather than trusted from the
 # branch it targets.
 #
-# Ported from totalfamily/app PR #1717 verbatim - this file needs no
-# sandbox adaptation, it never touches a GitHub App token or any Vercel/
-# Supabase/Slack dependency.
+# Ported from totalfamily/app PR #1717 - never touches a GitHub App token
+# or any Vercel/Supabase/Slack dependency, so needs no sandbox adaptation
+# beyond reusing scripts/ci/resolve-release-branch.js (added below).
 on:
   pull_request:
     branches: ["release/v*"]
@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v7
+
       - name: Confirm ancestry against the latest stable release
         uses: actions/github-script@v9
         env:
@@ -29,6 +31,8 @@ jobs:
           BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
         with:
           script: |
+            const { expectedReleaseBranch, isCurrentReleaseBranch } = require('./scripts/ci/resolve-release-branch.js');
+
             const headSha = process.env.HEAD_SHA;
             const baseBranch = process.env.BASE_BRANCH;
 
@@ -49,11 +53,10 @@ jobs:
             // tag, so the compareCommits check below would pass even for a PR
             // aimed at a superseded release branch. Reject the wrong target
             // explicitly instead of relying on ancestry alone.
-            const expectedBranch = `release/${latestTag}`;
-            if (baseBranch !== expectedBranch) {
+            if (!isCurrentReleaseBranch(baseBranch, latestTag)) {
               core.setFailed(
                 `This hotfix targets "${baseBranch}", but production is on "${latestTag}". ` +
-                `Re-target this PR at "${expectedBranch}".`
+                `Re-target this PR at "${expectedReleaseBranch(latestTag)}".`
               );
               return;
             }

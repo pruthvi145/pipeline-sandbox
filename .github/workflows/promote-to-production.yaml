@@ -32,7 +32,10 @@ jobs:
       release_id: ${{ steps.find.outputs.release_id }}
       already_stable: ${{ steps.find.outputs.already_stable }}
       is_newer_than_latest: ${{ steps.find.outputs.is_newer_than_latest }}
+      current_latest_tag: ${{ steps.find.outputs.current_latest_tag }}
     steps:
+      - uses: actions/checkout@v7
+
       - name: Validate tag format and release state
         id: find
         uses: actions/github-script@v9
@@ -42,11 +45,13 @@ jobs:
           INPUT_FORCE_DOWNGRADE: ${{ inputs.force_downgrade }}
         with:
           script: |
+            const { validateTagName } = require('./scripts/ci/check-release-downgrade.js');
+
             const tag = process.env.INPUT_TAG;
             const redeploy = process.env.INPUT_REDEPLOY === 'true';
             const forceDowngrade = process.env.INPUT_FORCE_DOWNGRADE === 'true';
 
-            if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
+            if (!validateTagName(tag)) {
               core.setFailed(`Tag "${tag}" does not match strict v-prefixed semver (e.g. v1.0.0). Refusing to promote.`);
               return;
             }
@@ -87,22 +92,9 @@ jobs:
             }
 
             // Guard against silently deploying an older version over a
-            // newer one that's already live - this becomes a real risk once
-            // hotfixes on older release/vX.Y.Z lines are common. "Currently
-            // live" is approximated as whatever GitHub currently calls the
-            // latest (non-draft, non-prerelease) release.
-            const parseSemver = (t) => {
-              const m = t.match(/^v(\d+)\.(\d+)\.(\d+)$/);
-              return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-            };
-            const compareSemver = (a, b) => {
-              for (let i = 0; i < 3; i++) {
-                if (a[i] !== b[i]) return a[i] - b[i];
-              }
-              return 0;
-            };
+            // newer one that's already live - see scripts/ci/check-release-downgrade.js.
+            const { evaluatePromotion } = require('./scripts/ci/check-release-downgrade.js');
 
-            let isNewerThanLatest = true;
             let currentLatestTag = null;
             try {
               const { data: latest } = await github.rest.repos.getLatestRelease({
@@ -114,22 +106,13 @@ jobs:
               if (err.status !== 404) throw err;
             }
 
-            if (currentLatestTag && currentLatestTag !== tag) {
-              const current = parseSemver(currentLatestTag);
-              const incoming = parseSemver(tag);
-              if (current && incoming) {
-                const cmp = compareSemver(incoming, current);
-                isNewerThanLatest = cmp > 0;
-                if (cmp < 0 && !forceDowngrade) {
-                  core.setFailed(
-                    `Refusing to promote ${tag}: production is currently on ${currentLatestTag}, which is newer. ` +
-                    `Promoting ${tag} now would downgrade production. Re-run with "force_downgrade" enabled if this is intentional.`
-                  );
-                  return;
-                }
-              }
+            const promotion = evaluatePromotion({ tag, currentLatestTag, forceDowngrade });
+            if (!promotion.allowed) {
+              core.setFailed(promotion.reason);
+              return;
             }
-            core.setOutput('is_newer_than_latest', String(isNewerThanLatest));
+            core.setOutput('is_newer_than_latest', String(promotion.isNewerThanLatest));
+            core.setOutput('current_latest_tag', currentLatestTag || '');
 
   deploy-to-prod:
     needs: validate-release
