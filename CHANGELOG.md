@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.3](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.2...v0.6.3) (2026-09-15)
+
+
+### Bug Fixes
+
+* **release:** never let verify-current-release-branch skip ([6bde922](https://github.com/pruthvi145/pipeline-sandbox/commit/6bde922305378e61ecf0b8239cb4073f78f39314))
+
+
+### Maintenance
+
+* **release:** remove temporary release-please output debug step ([5872f52](https://github.com/pruthvi145/pipeline-sandbox/commit/5872f5218533c092effe1590783262cccd8c92ae))
+
 ## [0.6.2](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.1...v0.6.2) (2026-09-15)
 
 
