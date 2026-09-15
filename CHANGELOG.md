@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.7](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.6...v0.6.7) (2026-09-15)
+
+
+### Bug Fixes
+
+* **ci:** cleanup-on-failure never actually ran despite matching its own condition ([953ec07](https://github.com/pruthvi145/pipeline-sandbox/commit/953ec07eb875717f4b739fb12003a5d0099e9433))
+
 ## [0.6.6](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.5...v0.6.6) (2026-09-15)
 
 
