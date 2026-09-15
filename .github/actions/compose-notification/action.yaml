@@ -1,0 +1,63 @@
+name: Compose Notification
+description: Compose notification title/status/message from release-pipeline job results
+
+inputs:
+  template:
+    description: "Template key: demo-deploy | prod-promote | hotfix-deploy"
+    required: true
+  deploy-result:
+    description: "Result of the primary deploy job (success/failure/cancelled/skipped)"
+    required: true
+  secondary-result:
+    description: "Secondary check result (E2E for demo/hotfix; mark-stable for prod-promote)"
+    required: false
+    default: ""
+  tag:
+    description: "Release tag (vX.Y.Z)"
+    required: true
+  release-body:
+    description: "Release notes body (used only for prod-promote success message)"
+    required: false
+    default: ""
+  redeploy:
+    description: "demo-deploy/prod-promote only: true when re-deploying an existing tag rather than a fresh one (E2E/mark-stable is skipped)"
+    required: false
+    default: "false"
+
+outputs:
+  title:
+    description: "Notification title"
+    value: ${{ steps.compose.outputs.title }}
+  status:
+    description: "success or failure"
+    value: ${{ steps.compose.outputs.status }}
+  message:
+    description: "Notification body"
+    value: ${{ steps.compose.outputs.message }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v9
+      id: compose
+      env:
+        TEMPLATE: ${{ inputs.template }}
+        DEPLOY_RESULT: ${{ inputs.deploy-result }}
+        SECONDARY_RESULT: ${{ inputs.secondary-result }}
+        TAG: ${{ inputs.tag }}
+        RELEASE_BODY: ${{ inputs.release-body }}
+        REDEPLOY: ${{ inputs.redeploy }}
+      with:
+        script: |
+          const { compose } = require(`${process.env.GITHUB_ACTION_PATH}/compose.js`);
+          const out = compose({
+            template: process.env.TEMPLATE,
+            deployResult: process.env.DEPLOY_RESULT,
+            secondaryResult: process.env.SECONDARY_RESULT,
+            tag: process.env.TAG,
+            releaseBody: process.env.RELEASE_BODY,
+            redeploy: process.env.REDEPLOY,
+          });
+          core.setOutput('title', out.title);
+          core.setOutput('status', out.status);
+          core.setOutput('message', out.message);

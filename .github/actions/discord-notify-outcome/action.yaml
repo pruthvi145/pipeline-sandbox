@@ -1,0 +1,81 @@
+name: Discord Notify Outcome
+description: Post a pipeline outcome notification to Discord via incoming webhook
+
+inputs:
+  webhook-url:
+    description: "Discord incoming webhook URL"
+    required: false
+    default: ""
+  title:
+    description: "Notification title"
+    required: true
+  status:
+    description: "Notification status: info, success, or failure"
+    required: false
+    default: "info"
+  message:
+    description: "Additional message text"
+    required: false
+    default: ""
+  url:
+    description: "Optional link to include"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v9
+      env:
+        DISCORD_WEBHOOK_URL: ${{ inputs.webhook-url }}
+        NOTIFY_TITLE: ${{ inputs.title }}
+        NOTIFY_STATUS: ${{ inputs.status }}
+        NOTIFY_MESSAGE: ${{ inputs.message }}
+        NOTIFY_URL: ${{ inputs.url }}
+      with:
+        script: |
+          const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+          if (!webhookUrl) {
+            core.info('DISCORD_WEBHOOK_URL not set, skipping Discord notification');
+            return;
+          }
+
+          const { buildPayload } = require(
+            `${process.env.GITHUB_ACTION_PATH}/build-payload.js`
+          );
+          const payload = buildPayload({
+            title: process.env.NOTIFY_TITLE,
+            status: process.env.NOTIFY_STATUS,
+            message: process.env.NOTIFY_MESSAGE,
+            url: process.env.NOTIFY_URL,
+          });
+
+          // A flaky Discord webhook must never fail the deploy it's reporting
+          // on - retry a couple of times, then surface a visible ::error::
+          // (shows up red in the Actions UI) without failing this job.
+          const MAX_ATTEMPTS = 3;
+          let lastError = "";
+          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            let res;
+            try {
+              res = await fetch(webhookUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              });
+            } catch (err) {
+              lastError = err.message || String(err);
+              if (attempt < MAX_ATTEMPTS) await new Promise((r) => setTimeout(r, 2000 * attempt));
+              continue;
+            }
+
+            if (res.ok) {
+              core.info(`Discord outcome notification sent: ${process.env.NOTIFY_TITLE}`);
+              return;
+            }
+
+            lastError = `HTTP ${res.status}: ${await res.text().catch(() => "")}`;
+            if (attempt < MAX_ATTEMPTS) await new Promise((r) => setTimeout(r, 2000 * attempt));
+          }
+
+          core.error(`Discord notification failed after ${MAX_ATTEMPTS} attempts: ${lastError}`);

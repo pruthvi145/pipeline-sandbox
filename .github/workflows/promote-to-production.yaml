@@ -280,3 +280,28 @@ jobs:
               if (err.status !== 422 && err.status !== 404) throw err;
               core.info(`${branch} was already gone - nothing to delete`);
             }
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [validate-release, deploy-to-prod, mark-stable]
+    if: |
+      always() && (needs.deploy-to-prod.result == 'success' || needs.deploy-to-prod.result == 'failure')
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/compose-notification
+        id: compose
+        with:
+          template: prod-promote
+          deploy-result: ${{ needs.deploy-to-prod.result }}
+          secondary-result: ${{ needs.mark-stable.result }}
+          tag: ${{ inputs.tag }}
+          redeploy: ${{ needs.validate-release.outputs.already_stable }}
+      - uses: ./.github/actions/discord-notify-outcome
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: ${{ steps.compose.outputs.title }}
+          status: ${{ steps.compose.outputs.status }}
+          message: ${{ steps.compose.outputs.message }}
+          url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

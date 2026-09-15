@@ -355,3 +355,64 @@ jobs:
           fi
 
           gh pr create --body "$BODY" "${PR_FLAGS[@]}"
+
+  notify-demo:
+    name: Notify - main RC deploy
+    if: |
+      github.ref_name == 'main' && always() &&
+      needs.release-please.outputs.release_created == 'true' &&
+      needs.deploy-to-demo.result != 'skipped'
+    needs: [release-please, deploy-to-demo, smoke-check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/compose-notification
+        id: compose
+        with:
+          template: demo-deploy
+          deploy-result: ${{ needs.deploy-to-demo.result }}
+          secondary-result: ${{ needs.smoke-check.result }}
+          tag: ${{ needs.release-please.outputs.tag_name }}
+      - uses: ./.github/actions/discord-notify-outcome
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: ${{ steps.compose.outputs.title }}
+          status: ${{ steps.compose.outputs.status }}
+          message: ${{ steps.compose.outputs.message }}
+          url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  notify-hotfix:
+    name: Notify - hotfix deploy
+    if: |
+      github.ref_name != 'main' && always() &&
+      needs.release-please.outputs.release_created == 'true'
+    needs: [release-please, deploy-to-demo, smoke-check, backport-to-main]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Pin to main, not the default github.ref (the release branch) - a
+      # frozen release branch may predate fixes to compose-notification's
+      # hotfix-deploy template.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - uses: ./.github/actions/compose-notification
+        id: compose
+        with:
+          template: hotfix-deploy
+          deploy-result: ${{ needs.deploy-to-demo.result }}
+          # Success only when smoke-check AND the backport PR both succeed -
+          # otherwise the "backport PR open" message would be a false
+          # positive if the backport failed.
+          secondary-result: ${{ (needs.smoke-check.result == 'success' && needs.backport-to-main.result == 'success') && 'success' || 'failure' }}
+          tag: ${{ needs.release-please.outputs.tag_name }}
+      - uses: ./.github/actions/discord-notify-outcome
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: ${{ steps.compose.outputs.title }}
+          status: ${{ steps.compose.outputs.status }}
+          message: ${{ steps.compose.outputs.message }}
+          url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
