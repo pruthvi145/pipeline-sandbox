@@ -1,25 +1,86 @@
 name: "Release: Create Release PR"
 
+# Handles both main-line releases (push to main) and hotfix releases (push
+# to any release/vX.Y.Z branch) in one file - the original locked design for
+# this pipeline (totalfamily/app PR #1717), applied here too instead of a
+# separate release-please-hotfix.yaml. Hotfix-only jobs
+# (verify-current-release-branch, backport-to-main, cleanup-on-failure) skip
+# via `if: github.ref_name != 'main'`. mark-prerelease/deploy-to-demo/
+# smoke-check are shared unchanged - neither ever referenced hotfix
+# specifics, so both push paths already used the same logic.
+#
+# Sandbox simplification: no GitHub App bot token (uses the workflow's own
+# GITHUB_TOKEN), vercel-environment is "preview" not "testing" (Hobby plan),
+# no Slack, smoke-check replaces Playwright E2E. Two config files remain
+# (release-please-config.json vs .hotfix.json) since versioning-strategy
+# genuinely differs and release-please-action takes exactly one config per
+# run - only the *workflow* file is unified, not the config.
 on:
   push:
-    branches: [main]
+    branches: [main, "release/v*"]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  # Sandbox simplification: the real app uses a GitHub App token here so the
-  # release PR / release / tag are attributed to a bot identity, not a human.
-  # This repo has no GitHub App set up, so it uses the workflow's own default
-  # GITHUB_TOKEN instead. That requires "Allow GitHub Actions to create and
-  # approve pull requests" enabled in Settings -> Actions -> General (already
-  # turned on for this repo) - without it, release-please-action fails to
-  # open the Release PR at all.
+  # release/vX.Y.Z branches are permanent and never deleted, so once one's
+  # been superseded by a newer release it can still receive stray pushes (a
+  # mistaken merge, a rebase, etc). Don't let release-please react to those -
+  # only the branch matching the current production release may cut a
+  # hotfix release. main has no such concept.
+  verify-current-release-branch:
+    if: github.ref_name != 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      is_current: ${{ steps.check.outputs.is_current }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Confirm this is the current production release branch
+        id: check
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { expectedReleaseBranch, isCurrentReleaseBranch } = require('./scripts/ci/resolve-release-branch.js');
+
+            const branch = context.ref.replace('refs/heads/', '');
+
+            let latestTag;
+            try {
+              const { data: latest } = await github.rest.repos.getLatestRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+              });
+              latestTag = latest.tag_name;
+            } catch (err) {
+              if (err.status !== 404) throw err;
+              core.warning('No stable release found yet - allowing (first release branch ever)');
+              core.setOutput('is_current', 'true');
+              return;
+            }
+
+            const isCurrent = isCurrentReleaseBranch(branch, latestTag);
+            if (!isCurrent) {
+              core.warning(
+                `${branch} is not the current release branch (production is on ${latestTag}, expected ` +
+                `branch "${expectedReleaseBranch(latestTag)}"). This branch has been superseded - skipping release-please.`
+              );
+            }
+            core.setOutput('is_current', String(isCurrent));
+
+  # Sandbox: no GitHub App token, uses this workflow's own GITHUB_TOKEN -
+  # requires "Allow GitHub Actions to create and approve pull requests" in
+  # Settings -> Actions -> General (already turned on for this repo).
   release-please:
+    needs: verify-current-release-branch
+    if: |
+      always() &&
+      (github.ref_name == 'main' || needs.verify-current-release-branch.outputs.is_current == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -33,12 +94,13 @@ jobs:
       - uses: googleapis/release-please-action@v5
         id: release
         with:
-          config-file: release-please-config.json
+          config-file: ${{ github.ref_name == 'main' && 'release-please-config.json' || 'release-please-config.hotfix.json' }}
           manifest-file: .release-please-manifest.json
+          target-branch: ${{ github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # Flip to prerelease BEFORE deploy so a failed deploy never leaves the
-  # release as the latest stable.
+  # release as the latest stable. Shared by main and hotfix releases alike.
   mark-prerelease:
     runs-on: ubuntu-latest
     needs: release-please
@@ -67,12 +129,8 @@ jobs:
             core.info(`Marked ${tag} as pre-release`);
 
   # vercel-environment is "preview" here, not "testing" - Vercel's custom
-  # named environments (which the real app's "testing" is) require a paid
-  # Pro/Enterprise plan and aren't available on this sandbox's Hobby account.
-  # Preview is Vercel's built-in non-production target, available on any
-  # plan, and fills the same functional role for this demo-deploy step. The
-  # "testing" GitHub Environment name is unrelated and unchanged - it only
-  # controls which GitHub secrets this job can see.
+  # named environments require a paid plan, unavailable on this sandbox's
+  # Hobby account. Shared by main and hotfix releases alike.
   deploy-to-demo:
     needs: [release-please, mark-prerelease]
     if: needs.release-please.outputs.release_created == 'true'
@@ -89,3 +147,116 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+  # Stand-in for the real app's Playwright E2E suite, which this sandbox
+  # doesn't have. Just proves the tag actually deployed and serves traffic.
+  # Shared by main and hotfix releases alike.
+  smoke-check:
+    name: Smoke-check the release on preview
+    needs: [release-please, deploy-to-demo]
+    if: needs.deploy-to-demo.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Hit /api/health on the preview deployment
+        env:
+          DEPLOY_URL: ${{ needs.deploy-to-demo.outputs.deployment-url }}
+        run: |
+          set -euo pipefail
+          echo "Checking ${DEPLOY_URL}/api/health"
+          curl -fsS "${DEPLOY_URL}/api/health"
+
+  backport-to-main:
+    name: Open backport PR to main
+    if: |
+      github.ref_name != 'main' &&
+      needs.deploy-to-demo.result == 'success' &&
+      needs.smoke-check.result == 'success'
+    needs: [release-please, deploy-to-demo, smoke-check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Cherry-pick hotfix commits + open backport PR
+        env:
+          VERSION: ${{ needs.release-please.outputs.tag_name }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          CP_BRANCH="backport/${VERSION}-to-main"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin "${RELEASE_BRANCH}"
+
+          # release/vX.Y.Z branches are permanent and accumulate hotfixes over
+          # time, so a plain ancestry range (main..branch) would re-list
+          # commits from an earlier hotfix already backported to main under a
+          # different cherry-pick SHA. `--cherry-pick --right-only` drops
+          # commits already applied to main by patch content, not just by
+          # exact SHA. release-please's own release/manifest commit is
+          # excluded too - cherry-picking it would overwrite main's version
+          # files with the hotfix version.
+          COMMITS=$(git log --reverse --no-merges --cherry-pick --right-only \
+            --invert-grep --grep='^chore(.*)\?: release' \
+            --pretty=format:%H "main...origin/${RELEASE_BRANCH}")
+          if [ -z "$COMMITS" ]; then
+            echo "No commits on ${RELEASE_BRANCH} beyond main - nothing to backport"
+            exit 0
+          fi
+
+          git checkout -b "${CP_BRANCH}"
+
+          CONFLICTS=""
+          CLEAN_COUNT=0
+          while IFS= read -r sha; do
+            [ -z "$sha" ] && continue
+            if git cherry-pick "$sha"; then
+              CLEAN_COUNT=$((CLEAN_COUNT + 1))
+            else
+              CONFLICTS="${CONFLICTS}- \`${sha}\`"$'\n'
+              git cherry-pick --abort
+            fi
+          done <<< "$COMMITS"
+
+          # Fail fast if every commit conflicted. Without this, we'd push an
+          # empty branch and `gh pr create` would bail with "no commits
+          # between base and head" - obscuring the real failure.
+          if [ "$CLEAN_COUNT" -eq 0 ]; then
+            echo "::error::All commits conflicted during backport to main. Resolve manually on ${RELEASE_BRANCH}, then re-run."
+            exit 1
+          fi
+
+          git push origin "${CP_BRANCH}"
+
+          BODY="Auto-generated backport PR for hotfix **${VERSION}** (from \`${RELEASE_BRANCH}\`)."$'\n\n'
+          BODY="${BODY}Merge within 24h to prevent drift between main and the hotfix tag."
+
+          PR_FLAGS=(
+            --title "chore: backport hotfix ${VERSION} to main"
+            --base main
+            --head "${CP_BRANCH}"
+          )
+
+          if [ -n "$CONFLICTS" ]; then
+            # Draft PR so a reviewer must manually resolve conflicts before
+            # the backport can merge.
+            BODY="${BODY}"$'\n\n'"⚠️ **Conflicts detected - MANUAL RESOLUTION REQUIRED.**"$'\n\n'
+            BODY="${BODY}"$'The following commits could not be applied cleanly:\n\n'"${CONFLICTS}"$'\n'
+            BODY="${BODY}"$'Check out this branch, apply each conflicted commit manually, resolve, and push.\n'
+            PR_FLAGS+=(--draft)
+            echo "::warning::Backport had conflicts on $(echo "$CONFLICTS" | grep -c '^-' || true) commits - PR opened as draft"
+          fi
+
+          gh pr create --body "$BODY" "${PR_FLAGS[@]}"
