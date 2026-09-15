@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.6](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.5...v0.6.6) (2026-09-15)
+
+
+### Bug Fixes
+
+* **ci:** smoke-check never actually reached the app - Vercel SSO wall swallowed it ([216faca](https://github.com/pruthvi145/pipeline-sandbox/commit/216facae63046281f03953be08dfa8f5e24423db))
+
 ## [0.6.5](https://github.com/pruthvi145/pipeline-sandbox/compare/v0.6.4...v0.6.5) (2026-09-15)
 
 
