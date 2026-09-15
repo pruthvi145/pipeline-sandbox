@@ -1,6 +1,6 @@
 {
   "name": "pipeline-sandbox",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "private": true,
   "scripts": {
     "hotfix:start": "node scripts/hotfix-start.js",
