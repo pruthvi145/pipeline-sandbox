@@ -216,9 +216,67 @@ jobs:
               });
               core.info(`Created permanent branch ${branchName} at ${commitSha.substring(0, 7)}`);
             } catch (err) {
-              // 422 = branch already exists. This branch is permanent and
-              // is never force-reset or reused - a re-dispatch/redeploy of
-              // the same tag must not touch it.
               if (err.status !== 422) throw err;
-              core.info(`Branch ${branchName} already exists - leaving it untouched (never force-reset)`);
+              // 422 covers more than "already exists" (e.g. a bad sha) - confirm
+              // the branch is actually there before treating this as success, so
+              // delete-superseded-release-branch never deletes the old branch
+              // while believing a new one replaced it.
+              try {
+                await github.rest.git.getRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `heads/${branchName}`,
+                });
+              } catch (getRefErr) {
+                throw err;
+              }
+              core.info(`Branch ${branchName} already exists - leaving it untouched`);
+            }
+
+  # release/vX.Y.Z branches exist only so a hotfix PR has something to
+  # target. Once a newer tag is promoted and gets its own release branch
+  # above, the previous one has done its job and is safe to delete. Runs
+  # off deploy-to-prod succeeding, not create-release-branch - a hotfix
+  # may never have created a branch for the previous tag at all, and
+  # that's fine, there's nothing to delete then.
+  delete-superseded-release-branch:
+    needs: [validate-release, deploy-to-prod]
+    if: needs.deploy-to-prod.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Delete the superseded release branch, if any
+        uses: actions/github-script@v9
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          CURRENT_LATEST_TAG: ${{ needs.validate-release.outputs.current_latest_tag }}
+          IS_NEWER_THAN_LATEST: ${{ needs.validate-release.outputs.is_newer_than_latest }}
+        with:
+          script: |
+            const { branchToDelete } = require('./scripts/ci/cleanup-superseded-release-branch.js');
+
+            const branch = branchToDelete({
+              tag: process.env.INPUT_TAG,
+              currentLatestTag: process.env.CURRENT_LATEST_TAG || null,
+              isNewerThanLatest: process.env.IS_NEWER_THAN_LATEST === 'true',
+            });
+
+            if (!branch) {
+              core.info('No superseded release branch to delete');
+              return;
+            }
+
+            try {
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `heads/${branch}`,
+              });
+              core.info(`Deleted superseded branch ${branch}`);
+            } catch (err) {
+              if (err.status !== 422 && err.status !== 404) throw err;
+              core.info(`${branch} was already gone - nothing to delete`);
             }
